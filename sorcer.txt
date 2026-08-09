@@ -1,0 +1,3726 @@
+--[[
+    ╔═══════════════════════════════════════════════╗
+    ║               SORCERY HUB v1.0                ║
+    ║         Sidebar Layout — Same Theme           ║
+    ║            Credits: Poleeater                 ║
+    ╚═══════════════════════════════════════════════╝
+]]
+
+-- ─── Services ────────────────────────────────────────────
+local Players           = game:GetService("Players")
+local TweenService      = game:GetService("TweenService")
+local UserInputService  = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CoreGui           = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- ─── Theme ───────────────────────────────────────────────
+local Theme = {
+    bg          = Color3.fromRGB(12, 14, 24),
+    bgLight     = Color3.fromRGB(18, 21, 34),
+    bgSidebar   = Color3.fromRGB(16, 18, 30),
+    card        = Color3.fromRGB(24, 27, 42),
+    cardHover   = Color3.fromRGB(32, 36, 56),
+    accent      = Color3.fromRGB(124, 92, 255),
+    accentLight = Color3.fromRGB(167, 139, 250),
+    accent2     = Color3.fromRGB(255, 99, 179),
+    text        = Color3.fromRGB(244, 246, 255),
+    subtext     = Color3.fromRGB(140, 146, 175),
+    stroke      = Color3.fromRGB(45, 50, 75),
+    strokeLight = Color3.fromRGB(70, 76, 105),
+    success     = Color3.fromRGB(80, 230, 160),
+    danger      = Color3.fromRGB(235, 75, 90),
+}
+
+local ULT_COLORS = {
+    Gojo      = Color3.fromRGB(100, 180, 255),  -- light blue
+    Mahito    = Color3.fromRGB(180, 150, 255),  -- light purple
+    Nanami    = Color3.fromRGB(80, 150, 255),   -- fancy blue
+    Naoya     = Color3.fromRGB(140, 130, 240),  -- blueish purple
+    Todo      = Color3.fromRGB(100, 200, 255),  -- light blue
+    Hakari    = Color3.fromRGB(160, 240, 160),  -- baby green
+    Choso     = Color3.fromRGB(180, 40, 50),    -- dark red
+    Kuroroshi = Color3.fromRGB(230, 90, 140),   -- redish pink
+    Ryus      = Color3.fromRGB(170, 220, 255),  -- baby blue
+    Haba      = Color3.fromRGB(160, 160, 170),  -- gray
+    Yuta      = Color3.fromRGB(255, 170, 200),  -- baby pink
+    Charles   = Color3.fromRGB(210, 190, 150),  -- light tan
+}
+
+-- ─── Forward declarations ────────────────────────────────
+local guiVisible = true
+local UpdateLogPopup = nil
+local hideKeybind = Enum.KeyCode.RightControl
+local keybindButton = nil
+local waitingForKey = false
+local showBanOverlay = nil  -- forward declaration
+local banOverlayActive = false
+
+-- ═══ HTTP BACKEND CONFIG ══════════════════════════════════
+-- npoint.io document URL — shared storage for admin commands and bans
+local NPOINT_URL = "https://api.npoint.io/530e53a55a5329367390"
+local HttpService = game:GetService("HttpService")
+
+-- Find the HTTP request function (different executors name it differently)
+local httpRequest = request or http_request or (syn and syn.request) or (http and http.request)
+if httpRequest then
+    pcall(function() HttpService.HttpEnabled = true end)
+end
+
+-- Fetch the backend JSON (returns table or nil)
+local function fetchBackend()
+    if not httpRequest then return nil end
+    local ok, response = pcall(function()
+        return httpRequest({
+            Url = NPOINT_URL,
+            Method = "GET",
+        })
+    end)
+    if not ok or not response or response.StatusCode ~= 200 then return nil end
+    local ok2, data = pcall(function() return HttpService:JSONDecode(response.Body) end)
+    if not ok2 or type(data) ~= "table" then return nil end
+    -- Ensure commands is an array
+    if type(data.commands) ~= "table" then data.commands = {} end
+    -- Ensure bans is an object (not array)
+    if type(data.bans) ~= "table" then data.bans = {} end
+    if data.bans[1] ~= nil then
+        -- It's an array — convert to object
+        local fixed = {}
+        for _, b in ipairs(data.bans) do
+            if b and b.userId then fixed[tostring(b.userId)] = b end
+        end
+        data.bans = fixed
+    end
+    -- Ensure online is an object (not array)
+    if type(data.online) ~= "table" then data.online = {} end
+    if data.online[1] ~= nil then
+        local fixed = {}
+        for _, u in ipairs(data.online) do
+            if u and u.userId then fixed[tostring(u.userId)] = u end
+        end
+        data.online = fixed
+    end
+    return data
+end
+
+-- Save the backend JSON
+-- We manually build the JSON to ensure bans/online are always objects {} not arrays []
+local function saveBackend(data)
+    if not httpRequest then return false end
+
+    -- Build JSON manually for the critical parts
+    local parts = {}
+
+    -- bans (always object)
+    table.insert(parts, '"bans":{')
+    local banParts = {}
+    if type(data.bans) == "table" and data.bans[1] == nil then
+        for k, v in pairs(data.bans) do
+            if k ~= "__dummy" then
+                table.insert(banParts, '"' .. k .. '":' .. HttpService:JSONEncode(v))
+            end
+        end
+    end
+    table.insert(parts, table.concat(banParts, ","))
+    table.insert(parts, '}')
+
+    -- commands (always array)
+    table.insert(parts, ',"commands":')
+    if type(data.commands) == "table" then
+        table.insert(parts, HttpService:JSONEncode(data.commands))
+    else
+        table.insert(parts, "[]")
+    end
+
+    -- online (always object)
+    table.insert(parts, ',"online":{')
+    local onlineParts = {}
+    if type(data.online) == "table" and data.online[1] == nil then
+        for k, v in pairs(data.online) do
+            if k ~= "__dummy" then
+                table.insert(onlineParts, '"' .. k .. '":' .. HttpService:JSONEncode(v))
+            end
+        end
+    end
+    table.insert(parts, table.concat(onlineParts, ","))
+    table.insert(parts, '}')
+
+    local json = "{" .. table.concat(parts, "") .. "}"
+
+    local ok, response = pcall(function()
+        return httpRequest({
+            Url = NPOINT_URL,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = json,
+        })
+    end)
+    return ok and response and response.StatusCode == 200
+end
+
+-- ═══ ADMIN LIST ═══════════════════════════════════════════
+-- Add usernames or user IDs below to make them admins.
+-- Easy to change — just add/remove names from this list.
+local ADMINS = {
+    "HACER136177",
+    -- Add more admins here:
+    -- "UsernameHere",
+    -- 12345678,  -- (user ID)
+}
+
+-- Check if a player is an admin
+local function checkIsAdmin(player)
+    for _, admin in ipairs(ADMINS) do
+        if type(admin) == "number" then
+            if player.UserId == admin then return true end
+        else
+            if player.Name == admin or player.DisplayName == admin then return true end
+        end
+    end
+    return false
+end
+
+local isAdmin = checkIsAdmin(LocalPlayer)
+
+-- ═══ BAN SYSTEM (npoint-backed, persists cross-server) ════
+local frozenPlayers = {}  -- { [userId] = true }
+local executedCmdIds = {} -- { [cmdId] = true } — commands we already ran
+
+-- Cache of backend data (refreshed by polling loop)
+local backendCache = { commands = {}, bans = {} }
+
+-- Check if a player is banned based on backend data
+local function isPlayerBanned(player)
+    if checkIsAdmin(player) then return false end
+    -- Safety: ensure bans is an object, not an array
+    if type(backendCache.bans) ~= "table" then return false end
+    if backendCache.bans[1] ~= nil then return false end  -- it's an array, no bans
+    local ban = backendCache.bans[tostring(player.UserId)]
+    if not ban then return false end
+    if ban.expires == nil then return true, nil end  -- infinite
+    if os.time() < ban.expires then return true, ban.expires end
+    return false  -- expired
+end
+
+-- Admin adds a ban to the backend
+local function adminAddBan(player, durationSeconds)
+    local data = fetchBackend()
+    if not data then return false end
+    -- Ensure bans is an object, not an array
+    if type(data.bans) ~= "table" then data.bans = {} end
+    -- Convert array to object if needed
+    if data.bans[1] ~= nil then
+        local fixed = {}
+        for _, b in ipairs(data.bans) do
+            if b.userId then fixed[tostring(b.userId)] = b end
+        end
+        data.bans = fixed
+    end
+    data.bans[tostring(player.UserId)] = {
+        name = player.Name,
+        displayName = player.DisplayName,
+        expires = durationSeconds and (os.time() + durationSeconds) or nil,
+        adminId = LocalPlayer.UserId,
+    }
+    -- Also post a ban command so the victim gets notified immediately
+    local cmdId = tostring(tick() + math.random())
+    if type(data.commands) ~= "table" then data.commands = {} end
+    table.insert(data.commands, {
+        id = cmdId,
+        action = "ban",
+        victimId = player.UserId,
+        adminId = LocalPlayer.UserId,
+        timestamp = os.time(),
+        extraData = tostring(durationSeconds or "perm"),
+    })
+    saveBackend(data)
+    backendCache = data
+    return true
+end
+
+-- Admin removes a ban from the backend
+local function adminRemoveBan(userIdStr)
+    local data = fetchBackend()
+    if not data then return false end
+    data.bans[userIdStr] = nil
+    saveBackend(data)
+    backendCache = data
+    return true
+end
+
+-- ═══ SCRIPT USER DETECTION (npoint-backed) ════════════════
+-- Client attributes don't replicate, so we register ourselves on the npoint
+-- backend. The admin polls the backend to see who's running the script.
+local onlineUsers = {}  -- { [userId_string] = { name = "...", displayName = "...", lastSeen = timestamp } }
+local pollingActive = true  -- moved up so register loop can see it
+
+-- Register ourselves as online
+local function registerOnline()
+    local data = fetchBackend()
+    if not data then return end
+    if not data.online then data.online = {} end
+    data.online[tostring(LocalPlayer.UserId)] = {
+        name = LocalPlayer.Name,
+        displayName = LocalPlayer.DisplayName,
+        lastSeen = os.time(),
+    }
+    saveBackend(data)
+    onlineUsers = data.online
+end
+
+-- Check if a player is a script user (based on backend data)
+local function isScriptUser(player)
+    local entry = onlineUsers[tostring(player.UserId)]
+    if not entry then return false end
+    -- Consider online if seen in the last 15 seconds
+    return (os.time() - entry.lastSeen) < 15
+end
+
+-- Register in background (don't block script load)
+task.spawn(function()
+    registerOnline()
+    while pollingActive do
+        task.wait(5)
+        if banOverlayActive then break end
+        registerOnline()
+    end
+end)
+
+-- Clean up our entry when leaving the game (local script safe)
+Players.PlayerRemoving:Connect(function(player)
+    if player == LocalPlayer then
+        local data = fetchBackend()
+        if data and data.online then
+            data.online[tostring(LocalPlayer.UserId)] = nil
+            saveBackend(data)
+        end
+    end
+end)
+
+-- ═══ VICTIM ACTIONS (executed on self when receiving command) ═══
+local function executeVictimAction(action, extraData)
+    if action == "kick" then
+        pcall(function() LocalPlayer:Kick("Kicked by Sorcery Hub admin") end)
+    elseif action == "kill" then
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                local h = char:FindFirstChildOfClass("Humanoid")
+                if h then h.Health = 0 end
+            end
+        end)
+    elseif action == "freeze" then
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                local h = char:FindFirstChildOfClass("Humanoid")
+                if h then
+                    h.WalkSpeed = 0
+                    h.JumpPower = 0
+                    h.JumpHeight = 0
+                end
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") then part.Anchored = true end
+                end
+                frozenPlayers[LocalPlayer.UserId] = true
+            end
+        end)
+    elseif action == "unfreeze" then
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                local h = char:FindFirstChildOfClass("Humanoid")
+                if h then
+                    h.WalkSpeed = 16
+                    h.JumpPower = 50
+                    h.JumpHeight = 7.2
+                end
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") then part.Anchored = false end
+                end
+                frozenPlayers[LocalPlayer.UserId] = nil
+            end
+        end)
+    elseif action == "bring" then
+        pcall(function()
+            local adminId = tonumber(extraData)
+            if not adminId then return end
+            local adminPlayer = Players:GetPlayerByUserId(adminId)
+            if not adminPlayer then return end
+            local myChar = LocalPlayer.Character
+            local adminChar = adminPlayer.Character
+            if myChar and adminChar then
+                local myRoot = myChar:FindFirstChild("HumanoidRootPart")
+                local adminRoot = adminChar:FindFirstChild("HumanoidRootPart")
+                if myRoot and adminRoot then
+                    myRoot.CFrame = adminRoot.CFrame * CFrame.new(0, 0, -4)
+                end
+            end
+        end)
+    elseif action == "ban" then
+        -- extraData = "perm" or seconds as string
+        local duration = nil
+        if extraData and extraData ~= "perm" then
+            duration = tonumber(extraData)
+        end
+        showBanOverlay(duration)
+    end
+end
+
+-- ═══ COMMAND POLLING LOOP ═════════════════════════════════
+-- Every 2 seconds, fetch the backend and check for new commands targeting us
+task.spawn(function()
+    while pollingActive do
+        task.wait(2)
+        -- Stop polling if ban overlay is active
+        if banOverlayActive then break end
+
+        -- Wrap everything in pcall so a single error doesn't kill the loop
+        local ok, err = pcall(function()
+            local data = fetchBackend()
+            if not data then return end
+
+            -- Ensure data structures are correct types
+            if type(data.commands) ~= "table" then data.commands = {} end
+            if type(data.bans) ~= "table" then data.bans = {} end
+            -- Fix bans if it's an array instead of object
+            if data.bans[1] ~= nil then
+                local fixed = {}
+                for _, b in ipairs(data.bans) do
+                    if b and b.userId then fixed[tostring(b.userId)] = b end
+                end
+                data.bans = fixed
+            end
+
+            backendCache = data
+            local cmdsToExecute = {}
+            local cmdsToRemove = {}
+
+            -- First pass: find commands targeting us
+            for _, cmd in ipairs(data.commands) do
+                if type(cmd) == "table" and cmd.id and cmd.victimId == LocalPlayer.UserId then
+                    if not executedCmdIds[cmd.id] then
+                        -- Verify the admin is actually an admin
+                        local adminPlayer = Players:GetPlayerByUserId(cmd.adminId)
+                        local adminValid = false
+                        if adminPlayer then
+                            adminValid = checkIsAdmin(adminPlayer)
+                        else
+                            for _, a in ipairs(ADMINS) do
+                                if type(a) == "string" and a == (cmd.adminName or "") then
+                                    adminValid = true
+                                    break
+                                end
+                            end
+                        end
+                        if adminValid then
+                            executedCmdIds[cmd.id] = true
+                            table.insert(cmdsToRemove, cmd.id)
+                            table.insert(cmdsToExecute, cmd)
+                        end
+                    end
+                end
+            end
+
+            -- Remove our commands from the backend (re-fetch to avoid race)
+            if #cmdsToRemove > 0 then
+                local freshData = fetchBackend()
+                if freshData then
+                    if type(freshData.commands) ~= "table" then freshData.commands = {} end
+                    if type(freshData.bans) ~= "table" then freshData.bans = {} end
+                    -- Fix bans array if needed
+                    if freshData.bans[1] ~= nil then
+                        local fixed = {}
+                        for _, b in ipairs(freshData.bans) do
+                            if b and b.userId then fixed[tostring(b.userId)] = b end
+                        end
+                        freshData.bans = fixed
+                    end
+                    local newCmds = {}
+                    for _, c in ipairs(freshData.commands) do
+                        local shouldRemove = false
+                        for _, id in ipairs(cmdsToRemove) do
+                            if c.id == id then shouldRemove = true break end
+                        end
+                        if not shouldRemove then
+                            table.insert(newCmds, c)
+                        end
+                    end
+                    freshData.commands = newCmds
+                    saveBackend(freshData)
+                    backendCache = freshData
+                end
+            end
+
+            -- Now execute the commands (after saving)
+            for _, cmd in ipairs(cmdsToExecute) do
+                pcall(executeVictimAction, cmd.action, cmd.extraData)
+                if cmd.action == "ban" then
+                    pollingActive = false
+                    return
+                end
+            end
+        end)
+
+        -- If there was an error, log it but keep polling
+        if not ok then
+            warn("[SorceryHub] Polling error: " .. tostring(err))
+        end
+    end
+end)
+
+-- ═══ ADMIN-SIDE ACTIONS ═══════════════════════════════════
+-- Admin posts a command to the backend
+local function sendAdminCommand(victimPlayer, action, extraData)
+    local data = fetchBackend()
+    if not data then
+        showNotification("Failed to connect to backend", 2)
+        return false
+    end
+    local cmdId = tostring(tick() + math.random())
+    table.insert(data.commands, {
+        id = cmdId,
+        action = action,
+        victimId = victimPlayer.UserId,
+        adminId = LocalPlayer.UserId,
+        adminName = LocalPlayer.Name,
+        timestamp = os.time(),
+        extraData = extraData and tostring(extraData) or nil,
+    })
+    -- Clean up old commands (older than 5 minutes)
+    local cutoff = os.time() - 300
+    local newCmds = {}
+    for _, c in ipairs(data.commands) do
+        if c.timestamp and c.timestamp > cutoff then
+            table.insert(newCmds, c)
+        end
+    end
+    data.commands = newCmds
+    saveBackend(data)
+    backendCache = data
+    return true
+end
+
+local function adminKick(player)
+    sendAdminCommand(player, "kick")
+end
+
+local function adminBring(player)
+    sendAdminCommand(player, "bring", LocalPlayer.UserId)
+end
+
+local function adminGoto(player)
+    -- Direct — admin moves self to victim
+    pcall(function()
+        local myChar = LocalPlayer.Character
+        local theirChar = player.Character
+        if myChar and theirChar then
+            local myRoot = myChar:FindFirstChild("HumanoidRootPart")
+            local theirRoot = theirChar:FindFirstChild("HumanoidRootPart")
+            if myRoot and theirRoot then
+                myRoot.CFrame = theirRoot.CFrame * CFrame.new(0, 0, 4)
+            end
+        end
+    end)
+end
+
+local function adminKill(player)
+    sendAdminCommand(player, "kill")
+end
+
+local function adminFreeze(player)
+    sendAdminCommand(player, "freeze")
+    frozenPlayers[player.UserId] = true  -- Track locally so the button toggles
+end
+
+local function adminUnfreeze(player)
+    sendAdminCommand(player, "unfreeze")
+    frozenPlayers[player.UserId] = nil  -- Track locally so the button toggles
+end
+
+local function adminBan(player, durationKey)
+    local durationMap = { perm = nil, ["1h"] = 3600, ["1d"] = 86400, ["1w"] = 604800, ["1m"] = 2592000 }
+    local duration = durationMap[durationKey]
+    adminAddBan(player, duration)
+    -- The ban command is already posted by adminAddBan
+end
+
+-- ─── Remote Definitions ──────────────────────────────────
+local MOVES = {
+    -- Moves tab is empty for now — all moves are in Movesets
+}
+
+local ULTS = {
+    {
+        name    = "Gojo",
+        desc    = "Yowaimo",
+        color   = ULT_COLORS.Gojo,
+        instantRemotes = { function() return ReplicatedStorage.Remotes.Gojo["gojo ult"] end },
+        extraMoves = {
+            { name = "Lapse Pull",    desc = "Gojo  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Gojo.Lapsepullair end },
+            { name = "Reversal Red",  desc = "Gojo  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Gojo["reversalred var"] end },
+        },
+    },
+    {
+        name    = "Mahito",
+        desc    = "Perfection",
+        color   = ULT_COLORS.Mahito,
+        instantRemotes = { function() return ReplicatedStorage.Remotes.Mahito.Perfection end },
+        extraMoves = {
+            { name = "Body Repel",       desc = "Mahito  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Mahito.Base.BodyRepel end },
+            { name = "Soul Multiplicity", desc = "Mahito  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Mahito.Base["Soul Multiplicity"] end },
+        },
+    },
+    {
+        name    = "Nanami",
+        desc    = "Overtime",
+        color   = ULT_COLORS.Nanami,
+        instantRemotes = { function() return ReplicatedStorage.Remotes.Nanami.Ultimate.Overtime end },
+        extraMoves = {
+            { name = "Retro Garde",   desc = "Nanami  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Nanami.Ultimate.Retrograde end },
+            { name = "Record Breaker", desc = "Nanami  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Nanami.Ultimate.BlackFlasg end },
+            { name = "Collapse",      desc = "Nanami  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Nanami.Ultimate.collapse end },
+        },
+    },
+    {
+        name    = "Naoya",
+        desc    = "Woman hater",
+        color   = ULT_COLORS.Naoya,
+        instantRemotes = {
+            function() return ReplicatedStorage.Remotes.Naoya.NaoyaUlt.Ultimate end,
+        },
+        extraMoves = {
+            { name = "Off My Mind",          desc = "Naoya  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Naoya.NaoyaBase.offmymind end },
+            { name = "Time Cell Moon Palace", desc = "Naoya  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Naoya.NaoyaUlt.TimeCellMoonPalace end },
+        },
+    },
+    {
+        name    = "Todo",
+        desc    = "Skitzo",
+        color   = ULT_COLORS.Todo,
+        instantRemotes = {},
+        extraMoves = {
+            { name = "Boogie Woogie", desc = "Todo  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.todo.gimmick end },
+            { name = "Slam Toss",     desc = "Todo  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.todo.grab end },
+            { name = "Pebble Toss",   desc = "Todo  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.todo.pebbletoss end },
+            { name = "Body Slam",     desc = "Todo  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.todo.suplex end },
+            { name = "Beatdown",      desc = "Todo  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.todo.tighthug end },
+        },
+    },
+    {
+        name    = "Hakari",
+        desc    = "Idle Death Gamble",
+        color   = ULT_COLORS.Hakari,
+        instantRemotes = {},
+        extraMoves = {
+            { name = "Pachinko",       desc = "Hakari  •  Base Move",   remote = function() return ReplicatedStorage.Remotes.Hakari.Base.Pachinko end },
+            { name = "Step It",        desc = "Hakari  •  Base Move",   remote = function() return ReplicatedStorage.Remotes.Hakari.Base.StepIt end },
+            { name = "Shutter Slam",   desc = "Hakari  •  Base Move",   remote = function() return ReplicatedStorage.Remotes.Hakari.Base.shutterslam end },
+            { name = "The Next Arcade", desc = "Hakari  •  Ult Move",   remote = function() return ReplicatedStorage.Remotes.Hakari.Ult.TheNextArcady end },
+            { name = "Burning Fever",  desc = "Hakari  •  Ult Move",   remote = function() return ReplicatedStorage.Remotes.Hakari.Ult["burning fever"] end },
+            { name = "Lucky Flurry",   desc = "Hakari  •  Ult Move",   remote = function() return ReplicatedStorage.Remotes.Hakari.Ult.luckyflurry end },
+        },
+    },
+    {
+        name    = "Choso",
+        desc    = "Blood Manipulation",
+        color   = ULT_COLORS.Choso,
+        instantRemotes = {},
+        extraMoves = {
+            { name = "Piercing Blood",   desc = "Choso  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Broso.peircingblood end },
+            { name = "Blood Tether",     desc = "Choso  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Broso["blood tether"] end },
+            { name = "Slicing Exorcism", desc = "Choso  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Broso["slicing exorcism"] end },
+        },
+    },
+    {
+        name    = "Ryus",
+        desc    = "Jane Juliet",
+        color   = ULT_COLORS.Ryus,
+        instantRemotes = { function() return ReplicatedStorage.Remotes.JaneJuliet.larp2 end },
+        extraMoves = {
+            { name = "Granite Blast",   desc = "Ryu  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.JaneJuliet.Beam2 end },
+            { name = "Carpet Bomb",     desc = "Ryu  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.JaneJuliet.Carpetbomb2 end },
+            { name = "Every Last Drop", desc = "Ryu  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.JaneJuliet.larp1 end },
+        },
+    },
+    {
+        name    = "Haba",
+        desc    = "Helicopter Guy",
+        color   = ULT_COLORS.Haba,
+        instantRemotes = {},
+        extraMoves = {
+            { name = "Propeller Fly",    desc = "Haba  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Haba.gimmick end },
+            { name = "Spinning Cyclone", desc = "Haba  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Haba.spinningcyclone end },
+            { name = "Twister",          desc = "Haba  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Haba.twister end },
+            { name = "Updraft",          desc = "Haba  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Haba.updraft end },
+        },
+    },
+    {
+        name    = "Yuta",
+        desc    = "SAVE ME RIKA!",
+        color   = ULT_COLORS.Yuta,
+        instantRemotes = {},
+        clickSound = "129976960969174",
+        notification = "Use Rika Summon before using any move",
+        extraMoves = {
+            { name = "Rika Summon", desc = "Yuta  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Bumta.Rika.Summon end },
+            { name = "Rika Throw",  desc = "Yuta  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Bumta.Rika.Punch end },
+            { name = "Rika Grab",   desc = "Yuta  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.Bumta.Rika.Grab end },
+        },
+    },
+    {
+        name    = "Charles",
+        desc    = "Holy larp character",
+        color   = ULT_COLORS.Charles,
+        instantRemotes = {},
+        extraMoves = {
+            { name = "Disgrace",         desc = "Charles  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.JhonJujutsu.Disgrace end },
+            { name = "Foresight",        desc = "Charles  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.JhonJujutsu.Foresight end },
+            { name = "Lame Passion",     desc = "Charles  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.JhonJujutsu["Lame passion"] end },
+            { name = "Staff Whirl",      desc = "Charles  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.JhonJujutsu["Staff Whirl"] end },
+            { name = "CAN YOU EVEN READ!", desc = "Charles  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.JhonJujutsu.read end },
+        },
+    },
+    {
+        name    = "Kuroroshi",
+        desc    = "Cursed Spirit",
+        color   = ULT_COLORS.Kuroroshi,
+        instantRemotes = {},
+        extraMoves = {
+            { name = "Festering",  desc = "Kuroroshi  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.kurakoshi.festering end },
+            { name = "Supplement", desc = "Kuroroshi  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.kurakoshi.supllemant end },
+            { name = "Tarnish",    desc = "Kuroroshi  •  Extra Move", remote = function() return ReplicatedStorage.Remotes.kurakoshi.tarnish end },
+        },
+    },
+}
+
+-- ─── Cleanup ─────────────────────────────────────────────
+local oldGui = CoreGui:FindFirstChild("SorceryHub")
+if oldGui then oldGui:Destroy() end
+local oldLocal = LocalPlayer.PlayerGui:FindFirstChild("SorceryHub")
+if oldLocal then oldLocal:Destroy() end
+
+-- ─── GUI Root ────────────────────────────────────────────
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "SorceryHub"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 999
+local parentOk = pcall(function() ScreenGui.Parent = CoreGui end)
+if not parentOk then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+-- ═══ BAN OVERLAY FUNCTION ═════════════════════════════════
+-- Shows a full-screen "You are Banned" overlay, hides all UI buttons
+-- durationSeconds = nil for permanent, otherwise seconds
+-- ═══ BAN OVERLAY FUNCTION ═════════════════════════════════
+-- Shows a full-screen "You are Banned" overlay that CANNOT be closed.
+-- The player stays in the game but can't use the script.
+-- durationSeconds = nil for permanent, otherwise seconds
+showBanOverlay = function(durationSeconds)
+    -- If overlay already active, don't create another
+    if banOverlayActive then return end
+    banOverlayActive = true
+
+    -- Remove any existing overlay
+    local existing = ScreenGui:FindFirstChild("BanOverlay")
+    if existing then existing:Destroy() end
+
+    -- Hide the main window if it exists
+    if _G.SorceryHub_Main then _G.SorceryHub_Main.Visible = false end
+
+    local Overlay = Instance.new("Frame")
+    Overlay.Name = "BanOverlay"
+    Overlay.Size = UDim2.new(1, 0, 1, 0)
+    Overlay.BackgroundColor3 = Color3.fromRGB(15, 8, 10)
+    Overlay.BorderSizePixel = 0
+    Overlay.ZIndex = 999
+    Overlay.Parent = ScreenGui
+
+    -- Prevent anything from appearing on top
+    Overlay.IgnoreGuiInset = true
+
+    local BannedCard = Instance.new("Frame")
+    BannedCard.Size = UDim2.new(0, 380, 0, 240)
+    BannedCard.Position = UDim2.new(0.5, -190, 0.5, -120)
+    BannedCard.BackgroundColor3 = Color3.fromRGB(25, 12, 14)
+    BannedCard.BorderSizePixel = 0
+    BannedCard.ZIndex = 1000
+    BannedCard.Parent = Overlay
+    local bc = Instance.new("UICorner")
+    bc.CornerRadius = UDim.new(0, 16)
+    bc.Parent = BannedCard
+    local bs = Instance.new("UIStroke")
+    bs.Color = Color3.fromRGB(235, 75, 90)
+    bs.Thickness = 2
+    bs.Parent = BannedCard
+
+    local BannedTitle = Instance.new("TextLabel")
+    BannedTitle.Size = UDim2.new(1, 0, 0, 40)
+    BannedTitle.Position = UDim2.new(0, 0, 0, 24)
+    BannedTitle.BackgroundTransparency = 1
+    BannedTitle.Font = Enum.Font.GothamBold
+    BannedTitle.TextSize = 26
+    BannedTitle.TextColor3 = Color3.fromRGB(235, 75, 90)
+    BannedTitle.Text = "You are Banned"
+    BannedTitle.ZIndex = 1001
+    BannedTitle.Parent = BannedCard
+
+    local TimeLabel = Instance.new("TextLabel")
+    TimeLabel.Size = UDim2.new(1, 0, 0, 30)
+    TimeLabel.Position = UDim2.new(0, 0, 0, 72)
+    TimeLabel.BackgroundTransparency = 1
+    TimeLabel.Font = Enum.Font.GothamBold
+    TimeLabel.TextSize = 16
+    TimeLabel.TextColor3 = Color3.fromRGB(255, 200, 200)
+    TimeLabel.ZIndex = 1001
+    TimeLabel.Parent = BannedCard
+
+    local DescLabel = Instance.new("TextLabel")
+    DescLabel.Size = UDim2.new(1, -40, 0, 60)
+    DescLabel.Position = UDim2.new(0, 20, 0, 112)
+    DescLabel.BackgroundTransparency = 1
+    DescLabel.Font = Enum.Font.GothamMedium
+    DescLabel.TextSize = 13
+    DescLabel.TextColor3 = Color3.fromRGB(200, 180, 185)
+    DescLabel.TextWrapped = true
+    DescLabel.ZIndex = 1001
+    DescLabel.Parent = BannedCard
+
+    -- Made by label
+    local MadeBy = Instance.new("TextLabel")
+    MadeBy.Size = UDim2.new(1, 0, 0, 16)
+    MadeBy.Position = UDim2.new(0, 0, 1, -22)
+    MadeBy.BackgroundTransparency = 1
+    MadeBy.Font = Enum.Font.Gotham
+    MadeBy.TextSize = 10
+    MadeBy.TextColor3 = Color3.fromRGB(100, 80, 85)
+    MadeBy.Text = "Sorcery Hub  •  by Poleeater"
+    MadeBy.ZIndex = 1001
+    MadeBy.Parent = BannedCard
+
+    if durationSeconds == nil then
+        TimeLabel.Text = "Permanent"
+        DescLabel.Text = "This ban is permanent.\nYou can never use Sorcery Hub again."
+    else
+        local expiry = os.time() + durationSeconds
+        local function updateTimer()
+            local remaining = expiry - os.time()
+            if remaining <= 0 then
+                TimeLabel.Text = "Ban Expired"
+                DescLabel.Text = "Your ban has expired.\nRejoin the game to use Sorcery Hub again."
+                return false
+            end
+            local days = math.floor(remaining / 86400)
+            local hours = math.floor((remaining % 86400) / 3600)
+            local mins = math.floor((remaining % 3600) / 60)
+            local secs = remaining % 60
+            if days > 0 then
+                TimeLabel.Text = days .. "d " .. hours .. "h " .. mins .. "m " .. secs .. "s"
+            elseif hours > 0 then
+                TimeLabel.Text = hours .. "h " .. mins .. "m " .. secs .. "s"
+            elseif mins > 0 then
+                TimeLabel.Text = mins .. "m " .. secs .. "s"
+            else
+                TimeLabel.Text = secs .. "s"
+            end
+            DescLabel.Text = "Time remaining:\n" .. TimeLabel.Text .. "\n\nRejoin when the timer ends."
+            return true
+        end
+        updateTimer()
+        task.spawn(function()
+            while true do
+                task.wait(1)
+                if not updateTimer() then break end
+                if not Overlay or not Overlay.Parent then break end
+            end
+        end)
+    end
+end
+
+-- ═══ BAN CHECK (fetch from npoint backend) ════════════════
+-- Run ban check in background so it doesn't block script loading
+task.spawn(function()
+    local initialBackend = fetchBackend()
+    if initialBackend then
+        backendCache = initialBackend
+        local banned, banExpiry = isPlayerBanned(LocalPlayer)
+        if banned then
+            local duration = nil
+            if banExpiry then
+                duration = banExpiry - os.time()
+                if duration <= 0 then
+                    -- Ban expired — remove it from backend
+                    pcall(function()
+                        initialBackend.bans[tostring(LocalPlayer.UserId)] = nil
+                        saveBackend(initialBackend)
+                    end)
+                else
+                    showBanOverlay(duration)
+                end
+            else
+                -- Permanent ban
+                showBanOverlay(nil)
+            end
+        end
+    end
+end)
+
+-- ─── Helpers ─────────────────────────────────────────────
+local function round(parent, radius)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, radius)
+    c.Parent = parent
+    return c
+end
+
+local function stroke(parent, color, thickness, transparency)
+    local s = Instance.new("UIStroke")
+    s.Color = color or Theme.stroke
+    s.Thickness = thickness or 1
+    s.Transparency = transparency or 0.2
+    s.Parent = parent
+    return s
+end
+
+local function gradient(parent, color1, color2, rotation)
+    local g = Instance.new("UIGradient")
+    g.Color = ColorSequence.new(color1, color2)
+    g.Rotation = rotation or 90
+    g.Parent = parent
+    return g
+end
+
+local function padding(parent, top, bottom, left, right)
+    local p = Instance.new("UIPadding")
+    p.PaddingTop = UDim.new(0, top or 0)
+    p.PaddingBottom = UDim.new(0, bottom or 0)
+    p.PaddingLeft = UDim.new(0, left or 0)
+    p.PaddingRight = UDim.new(0, right or 0)
+    p.Parent = parent
+    return p
+end
+
+local function tween(obj, props, time, style, dir)
+    if not obj or not obj.Parent then return nil end
+    local info = TweenInfo.new(time or 0.25, style or Enum.EasingStyle.Quart, dir or Enum.EasingDirection.Out)
+    local t = TweenService:Create(obj, info, props)
+    t:Play()
+    return t
+end
+
+-- ─── Sound Holder ────────────────────────────────────────
+local SoundHolder = Instance.new("Frame")
+SoundHolder.Name = "SoundHolder"
+SoundHolder.Size = UDim2.new(0, 0, 0, 0)
+SoundHolder.BackgroundTransparency = 1
+SoundHolder.Parent = ScreenGui
+
+-- ─── SFX Engine + Emblem Builder ─────────────────────────
+local SFX = {
+    riser   = "138890894929151",
+    pop     = "140323850218372",
+    impact  = "130113422174820",
+    shimmer = "136677503683492",
+}
+
+-- Layered playback: same assets, but pitch/detune makes them feel new
+local function playSfx(id, volume, pitch, delayTime)
+    task.spawn(function()
+        if delayTime and delayTime > 0 then task.wait(delayTime) end
+        pcall(function()
+            local s = Instance.new("Sound")
+            s.SoundId = "rbxassetid://" .. tostring(id)
+            s.Volume = volume or 0.5
+            s.PlaybackSpeed = (pitch or 1) * (1 + (math.random() - 0.5) * 0.04)
+            s.Parent = SoundHolder
+            s:Play()
+            task.delay(6, function() if s and s.Parent then s:Destroy() end end)
+        end)
+    end)
+end
+
+-- Shared emblem: segmented ring + gradient disc + dark diamond + orbit sparks
+local function buildEmblem(parent, size, baseZ)
+    baseZ = baseZ or 5
+    local E = { segs = {}, dots = {} }
+
+    local root = Instance.new("Frame")
+    root.Name = "Emblem"
+    root.Size = UDim2.new(0, size, 0, size)
+    root.BackgroundTransparency = 1
+    root.ZIndex = baseZ
+    root.Parent = parent
+    E.root = root
+
+    -- soft halo glow
+    local halo = Instance.new("Frame")
+    halo.Size = UDim2.new(0, size * 1.7, 0, size * 1.7)
+    halo.Position = UDim2.new(0.5, 0, 0.5, 0)
+    halo.AnchorPoint = Vector2.new(0.5, 0.5)
+    halo.BackgroundColor3 = Theme.accent
+    halo.BackgroundTransparency = 0.9
+    halo.BorderSizePixel = 0
+    halo.ZIndex = baseZ
+    halo.Parent = root
+    local hc = Instance.new("UICorner")
+    hc.CornerRadius = UDim.new(0.5, 0)
+    hc.Parent = halo
+    E.halo = halo
+
+    -- segmented outer ring (12 shards, alternating theme colors)
+    local ringR = size * 0.46
+    for i = 1, 12 do
+        local seg = Instance.new("Frame")
+        local a = math.rad((i - 1) * 30)
+        seg.Size = UDim2.new(0, size * 0.14, 0, math.max(2, size * 0.04))
+        seg.AnchorPoint = Vector2.new(0.5, 0.5)
+        seg.Position = UDim2.new(0.5, math.cos(a) * ringR, 0.5, math.sin(a) * ringR)
+        seg.Rotation = math.deg(a) + 90
+        seg.BackgroundColor3 = (i % 3 == 0) and Theme.accent2 or ((i % 2 == 0) and Theme.accentLight or Theme.accent)
+        seg.BorderSizePixel = 0
+        seg.ZIndex = baseZ + 1
+        local sc = Instance.new("UICorner")
+        sc.CornerRadius = UDim.new(0, 2)
+        sc.Parent = seg
+        seg.Parent = root
+        E.segs[i] = seg
+    end
+
+    -- mid ring (accent2 stroke)
+    local midRing = Instance.new("Frame")
+    midRing.Size = UDim2.new(0, size * 0.72, 0, size * 0.72)
+    midRing.Position = UDim2.new(0.5, 0, 0.5, 0)
+    midRing.AnchorPoint = Vector2.new(0.5, 0.5)
+    midRing.BackgroundTransparency = 1
+    midRing.ZIndex = baseZ + 1
+    midRing.Parent = root
+    local mrc = Instance.new("UICorner")
+    mrc.CornerRadius = UDim.new(0.5, 0)
+    mrc.Parent = midRing
+    local mrs = Instance.new("UIStroke")
+    mrs.Color = Theme.accent2
+    mrs.Thickness = math.max(1.5, size * 0.022)
+    mrs.Transparency = 0.3
+    mrs.Parent = midRing
+    E.midRing = midRing
+    E.midRingStroke = mrs
+
+    -- gradient disc
+    local disc = Instance.new("Frame")
+    disc.Size = UDim2.new(0, size * 0.56, 0, size * 0.56)
+    disc.Position = UDim2.new(0.5, 0, 0.5, 0)
+    disc.AnchorPoint = Vector2.new(0.5, 0.5)
+    disc.BackgroundColor3 = Theme.accent
+    disc.BorderSizePixel = 0
+    disc.ZIndex = baseZ + 2
+    disc.Parent = root
+    local dc = Instance.new("UICorner")
+    dc.CornerRadius = UDim.new(0.5, 0)
+    dc.Parent = disc
+    gradient(disc, Theme.accent, Theme.accent2, 45)
+    E.discStroke = stroke(disc, Theme.accentLight, 1, 0.25)
+    E.disc = disc
+
+    -- dark diamond core
+    local diamond = Instance.new("Frame")
+    diamond.Size = UDim2.new(0, size * 0.26, 0, size * 0.26)
+    diamond.Position = UDim2.new(0.5, 0, 0.5, 0)
+    diamond.AnchorPoint = Vector2.new(0.5, 0.5)
+    diamond.Rotation = 45
+    diamond.BackgroundColor3 = Theme.bg
+    diamond.BorderSizePixel = 0
+    diamond.ZIndex = baseZ + 3
+    diamond.Parent = root
+    round(diamond, math.max(2, size * 0.045))
+    E.diamondStroke = stroke(diamond, Theme.accentLight, 1, 0.3)
+    E.diamond = diamond
+
+    -- white core spark
+    local core = Instance.new("Frame")
+    core.Size = UDim2.new(0, math.max(3, size * 0.075), 0, math.max(3, size * 0.075))
+    core.Position = UDim2.new(0.5, 0, 0.5, 0)
+    core.AnchorPoint = Vector2.new(0.5, 0.5)
+    core.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    core.BorderSizePixel = 0
+    core.ZIndex = baseZ + 4
+    core.Parent = root
+    local cc = Instance.new("UICorner")
+    cc.CornerRadius = UDim.new(0.5, 0)
+    cc.Parent = core
+    E.core = core
+
+    -- orbit dots
+    for i = 1, 4 do
+        local d = Instance.new("Frame")
+        d.Size = UDim2.new(0, math.max(3, size * 0.055), 0, math.max(3, size * 0.055))
+        d.Position = UDim2.new(0.5, 0, 0.5, 0)
+        d.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        d.BackgroundTransparency = 0.15
+        d.BorderSizePixel = 0
+        d.ZIndex = baseZ + 4
+        local dcc = Instance.new("UICorner")
+        dcc.CornerRadius = UDim.new(0.5, 0)
+        dcc.Parent = d
+        d.Parent = root
+        E.dots[i] = d
+    end
+    E.orbitR = size * 0.375
+    return E
+end
+
+-- ─── Loading Animation ───────────────────────────────────
+local LoadingOverlay = Instance.new("Frame")
+LoadingOverlay.Size = UDim2.new(1, 0, 1, 0)
+LoadingOverlay.BackgroundColor3 = Theme.bg
+LoadingOverlay.BackgroundTransparency = 1
+LoadingOverlay.BorderSizePixel = 0
+LoadingOverlay.ZIndex = 100
+LoadingOverlay.Parent = ScreenGui
+
+local LoadCube = Instance.new("CanvasGroup")
+LoadCube.Size = UDim2.new(0, 0, 0, 0)
+LoadCube.Position = UDim2.new(0.5, 0, 0.5, 0)
+LoadCube.BackgroundColor3 = Theme.accent
+LoadCube.BorderSizePixel = 0
+LoadCube.GroupTransparency = 0
+LoadCube.ZIndex = 101
+LoadCube.Parent = LoadingOverlay
+round(LoadCube, 14)
+gradient(LoadCube, Theme.accent, Theme.accent2, 45)
+stroke(LoadCube, Theme.accentLight, 2, 0)
+
+local CubeDiamond = Instance.new("Frame")
+CubeDiamond.Size = UDim2.new(0, 24, 0, 24)
+CubeDiamond.Position = UDim2.new(0.5, -12, 0.5, -12)
+CubeDiamond.BackgroundColor3 = Theme.bg
+CubeDiamond.BorderSizePixel = 0
+CubeDiamond.Rotation = 45
+CubeDiamond.ZIndex = 102
+CubeDiamond.Parent = LoadCube
+round(CubeDiamond, 3)
+
+local loadDots = {}
+local dotStartPositions = {
+    UDim2.new(0, 30, 0, 30),
+    UDim2.new(1, -38, 0, 30),
+    UDim2.new(0, 30, 1, -38),
+    UDim2.new(1, -38, 1, -38),
+}
+for i = 1, 4 do
+    local d = Instance.new("Frame")
+    d.Size = UDim2.new(0, 6, 0, 6)
+    d.Position = dotStartPositions[i]
+    d.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    d.BorderSizePixel = 0
+    d.ZIndex = 102
+    d.Visible = false
+    d.Parent = LoadingOverlay
+    round(d, 3)
+    loadDots[i] = d
+end
+
+local Flash = Instance.new("Frame")
+Flash.Size = UDim2.new(1, 0, 1, 0)
+Flash.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Flash.BackgroundTransparency = 1
+Flash.BorderSizePixel = 0
+Flash.ZIndex = 110
+Flash.Parent = LoadingOverlay
+
+-- ─── Main Window (sidebar layout) ────────────────────────
+local SIDEBAR_WIDTH = 160
+local WINDOW_W = 560
+local WINDOW_H = 400
+
+local Main = Instance.new("CanvasGroup")
+Main.Name = "Main"
+Main.Size = UDim2.new(0, WINDOW_W, 0, WINDOW_H)
+Main.Position = UDim2.new(0.5, -WINDOW_W/2, 0.5, -WINDOW_H/2)
+Main.BackgroundColor3 = Theme.bg
+Main.BorderSizePixel = 0
+Main.GroupTransparency = 1
+Main.Visible = false
+Main.Parent = ScreenGui
+_G.SorceryHub_Main = Main  -- Store so ban overlay can hide it
+round(Main, 18)
+stroke(Main, Theme.stroke, 1.5, 0.1)
+
+-- Top accent glow bar (only on content area, NOT over sidebar)
+local GlowBar = Instance.new("Frame")
+GlowBar.Size = UDim2.new(1, -SIDEBAR_WIDTH, 0, 2)
+GlowBar.Position = UDim2.new(0, SIDEBAR_WIDTH, 0, 0)
+GlowBar.BackgroundColor3 = Theme.accent
+GlowBar.BorderSizePixel = 0
+GlowBar.ZIndex = 2
+GlowBar.Parent = Main
+gradient(GlowBar, Theme.accent, Theme.accent2, 0)
+round(GlowBar, 2)
+
+-- ─── Sidebar ─────────────────────────────────────────────
+local Sidebar = Instance.new("Frame")
+Sidebar.Name = "Sidebar"
+Sidebar.Size = UDim2.new(0, SIDEBAR_WIDTH, 1, 0)
+Sidebar.Position = UDim2.new(0, 0, 0, 0)
+Sidebar.BackgroundColor3 = Theme.bgSidebar
+Sidebar.BorderSizePixel = 0
+Sidebar.ZIndex = 5
+Sidebar.Parent = Main
+round(Sidebar, 18)
+
+-- Clip the right corners of sidebar (so only left is rounded)
+-- By making a thin overlay on the right edge of sidebar
+local sidebarRightCover = Instance.new("Frame")
+sidebarRightCover.Size = UDim2.new(0, 10, 1, 0)
+sidebarRightCover.Position = UDim2.new(1, -10, 0, 0)
+sidebarRightCover.BackgroundColor3 = Theme.bgSidebar
+sidebarRightCover.BorderSizePixel = 0
+sidebarRightCover.ZIndex = 5
+sidebarRightCover.Parent = Sidebar
+
+-- Vertical divider line between sidebar and content
+local Divider = Instance.new("Frame")
+Divider.Size = UDim2.new(0, 1, 1, -20)
+Divider.Position = UDim2.new(0, SIDEBAR_WIDTH, 0, 10)
+Divider.BackgroundColor3 = Theme.stroke
+Divider.BorderSizePixel = 0
+Divider.ZIndex = 6
+Divider.Parent = Main
+
+-- Logo at top of sidebar
+local LogoContainer = Instance.new("Frame")
+LogoContainer.Size = UDim2.new(1, 0, 0, 70)
+LogoContainer.BackgroundTransparency = 1
+LogoContainer.ZIndex = 6
+LogoContainer.Parent = Sidebar
+
+local Logo = Instance.new("Frame")
+Logo.Size = UDim2.new(0, 38, 0, 38)
+Logo.Position = UDim2.new(0.5, -19, 0.5, -19)
+Logo.BackgroundColor3 = Theme.accent
+Logo.BorderSizePixel = 0
+Logo.ZIndex = 7
+Logo.Parent = LogoContainer
+round(Logo, 11)
+gradient(Logo, Theme.accent, Theme.accent2, 45)
+stroke(Logo, Theme.accentLight, 0.5, 0.15)
+
+local Diamond = Instance.new("Frame")
+Diamond.Size = UDim2.new(0, 16, 0, 16)
+Diamond.Position = UDim2.new(0.5, -8, 0.5, -8)
+Diamond.BackgroundColor3 = Theme.bgSidebar
+Diamond.BorderSizePixel = 0
+Diamond.Rotation = 45
+Diamond.ZIndex = 8
+Diamond.Parent = Logo
+round(Diamond, 2)
+
+local orbitDots = {}
+for i = 1, 4 do
+    local d = Instance.new("Frame")
+    d.Size = UDim2.new(0, 3, 0, 3)
+    d.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    d.BorderSizePixel = 0
+    d.ZIndex = 8
+    d.Parent = Logo
+    round(d, 1.5)
+    orbitDots[i] = d
+end
+
+-- Title below logo
+local SideTitle = Instance.new("TextLabel")
+SideTitle.Size = UDim2.new(1, 0, 0, 18)
+SideTitle.Position = UDim2.new(0, 0, 0, 74)
+SideTitle.BackgroundTransparency = 1
+SideTitle.Font = Enum.Font.GothamBold
+SideTitle.TextSize = 13
+SideTitle.TextColor3 = Theme.text
+SideTitle.Text = "Sorcery Hub"
+SideTitle.ZIndex = 7
+SideTitle.Parent = Sidebar
+
+local SideVersion = Instance.new("TextLabel")
+SideVersion.Size = UDim2.new(1, 0, 0, 14)
+SideVersion.Position = UDim2.new(0, 0, 0, 92)
+SideVersion.BackgroundTransparency = 1
+SideVersion.Font = Enum.Font.Gotham
+SideVersion.TextSize = 10
+SideVersion.TextColor3 = Theme.subtext
+SideVersion.Text = "v1.2"
+SideVersion.ZIndex = 7
+SideVersion.Parent = Sidebar
+
+-- Sidebar buttons container
+local SideBtnsContainer = Instance.new("Frame")
+SideBtnsContainer.Size = UDim2.new(1, -20, 1, -180)
+SideBtnsContainer.Position = UDim2.new(0, 10, 0, 120)
+SideBtnsContainer.BackgroundTransparency = 1
+SideBtnsContainer.ZIndex = 6
+SideBtnsContainer.Parent = Sidebar
+
+local SideBtnsLayout = Instance.new("UIListLayout")
+SideBtnsLayout.FillDirection = Enum.FillDirection.Vertical
+SideBtnsLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+SideBtnsLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+SideBtnsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+SideBtnsLayout.Padding = UDim.new(0, 4)
+SideBtnsLayout.Parent = SideBtnsContainer
+
+-- Sidebar footer (keybind hint + YouTube button)
+local SideFooter = Instance.new("TextLabel")
+SideFooter.Size = UDim2.new(1, -10, 0, 16)
+SideFooter.Position = UDim2.new(0, 5, 1, -52)
+SideFooter.BackgroundTransparency = 1
+SideFooter.Font = Enum.Font.Gotham
+SideFooter.TextSize = 9
+SideFooter.TextColor3 = Theme.subtext
+SideFooter.Text = hideKeybind.Name .. " to toggle  •  by Poleeater"
+SideFooter.ZIndex = 7
+SideFooter.Parent = Sidebar
+
+-- YouTube logo button (clickable, opens confirmation popup)
+local YtBtn = Instance.new("TextButton")
+YtBtn.Size = UDim2.new(0, 28, 0, 20)
+YtBtn.Position = UDim2.new(0.5, -14, 1, -30)
+YtBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+YtBtn.BackgroundTransparency = 0.3
+YtBtn.BorderSizePixel = 0
+YtBtn.Font = Enum.Font.GothamBold
+YtBtn.TextSize = 10
+YtBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+YtBtn.Text = "▶"
+YtBtn.ZIndex = 7
+YtBtn.Parent = Sidebar
+round(YtBtn, 4)
+stroke(YtBtn, Color3.fromRGB(255, 80, 80), 0.5, 0.3)
+
+YtBtn.MouseEnter:Connect(function()
+    tween(YtBtn, {BackgroundTransparency = 0.1, Size = UDim2.new(0, 32, 0, 22)}, 0.2, Enum.EasingStyle.Sine)
+    YtBtn.Position = UDim2.new(0.5, -16, 1, -31)
+end)
+YtBtn.MouseLeave:Connect(function()
+    tween(YtBtn, {BackgroundTransparency = 0.3, Size = UDim2.new(0, 28, 0, 20)}, 0.25, Enum.EasingStyle.Sine)
+    YtBtn.Position = UDim2.new(0.5, -14, 1, -30)
+end)
+
+-- ─── Top bar (in content area) ───────────────────────────
+local TopBar = Instance.new("Frame")
+TopBar.Size = UDim2.new(1, -SIDEBAR_WIDTH, 0, 50)
+TopBar.Position = UDim2.new(0, SIDEBAR_WIDTH, 0, 0)
+TopBar.BackgroundTransparency = 1
+TopBar.ZIndex = 5
+TopBar.Parent = Main
+padding(TopBar, 0, 0, 20, 16)
+
+-- Page title (shows current tab name)
+local PageTitle = Instance.new("TextLabel")
+PageTitle.Size = UDim2.new(1, -100, 0, 24)
+PageTitle.Position = UDim2.new(0, 0, 0.5, -16)
+PageTitle.BackgroundTransparency = 1
+PageTitle.Font = Enum.Font.GothamBold
+PageTitle.TextSize = 16
+PageTitle.TextColor3 = Theme.text
+PageTitle.TextXAlignment = Enum.TextXAlignment.Left
+PageTitle.Text = "Moves"
+PageTitle.ZIndex = 6
+PageTitle.Parent = TopBar
+
+-- Page subtitle (shows count or hint)
+local PageSubtitle = Instance.new("TextLabel")
+PageSubtitle.Size = UDim2.new(1, -100, 0, 14)
+PageSubtitle.Position = UDim2.new(0, 0, 0.5, 6)
+PageSubtitle.BackgroundTransparency = 1
+PageSubtitle.Font = Enum.Font.Gotham
+PageSubtitle.TextSize = 11
+PageSubtitle.TextColor3 = Theme.subtext
+PageSubtitle.TextXAlignment = Enum.TextXAlignment.Left
+PageSubtitle.Text = ""
+PageSubtitle.ZIndex = 6
+PageSubtitle.Parent = TopBar
+
+-- Minimize & Close buttons (top right of content area)
+local MinBtn = Instance.new("TextButton")
+MinBtn.Size = UDim2.new(0, 30, 0, 30)
+MinBtn.Position = UDim2.new(1, -72, 0.5, -15)
+MinBtn.BackgroundColor3 = Theme.card
+MinBtn.BorderSizePixel = 0
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = 14
+MinBtn.TextColor3 = Theme.subtext
+MinBtn.Text = "—"
+MinBtn.ZIndex = 6
+MinBtn.Parent = TopBar
+round(MinBtn, 8)
+stroke(MinBtn, Theme.stroke, 1, 0.1)
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+CloseBtn.Position = UDim2.new(1, -36, 0.5, -15)
+CloseBtn.BackgroundColor3 = Theme.card
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 18
+CloseBtn.TextColor3 = Theme.subtext
+CloseBtn.Text = "×"
+CloseBtn.ZIndex = 6
+CloseBtn.Parent = TopBar
+round(CloseBtn, 8)
+stroke(CloseBtn, Theme.stroke, 1, 0.1)
+
+-- ─── Content Area ────────────────────────────────────────
+local Content = Instance.new("Frame")
+Content.Size = UDim2.new(1, -SIDEBAR_WIDTH - 32, 1, -70)
+Content.Position = UDim2.new(0, SIDEBAR_WIDTH + 16, 0, 56)
+Content.BackgroundTransparency = 1
+Content.ZIndex = 5
+Content.Parent = Main
+
+-- ─── Tab system (sidebar buttons) ────────────────────────
+local TAB_NAMES = { "Moves", "Movesets", "Credits", "Settings" }
+local TAB_SUBTITLES = {
+    "Standalone tools",
+    "Character kits with extra moves",
+    "Made by Poleeater",
+    "Configure your experience",
+}
+if isAdmin then
+    table.insert(TAB_NAMES, "Admin")
+    table.insert(TAB_SUBTITLES, "Manage players and script users")
+end
+local TabButtons = {}
+local TabPages = {}
+local activeTab = -1
+
+local function makeSideButton(name, idx)
+    local Btn = Instance.new("TextButton")
+    Btn.Size = UDim2.new(1, 0, 0, 36)
+    Btn.BackgroundColor3 = Theme.card
+    Btn.BackgroundTransparency = 1
+    Btn.BorderSizePixel = 0
+    Btn.Font = Enum.Font.GothamMedium
+    Btn.TextSize = 12
+    Btn.TextColor3 = Theme.subtext
+    Btn.Text = name
+    Btn.ZIndex = 7
+    Btn.LayoutOrder = idx
+    Btn.Parent = SideBtnsContainer
+    round(Btn, 8)
+    TabButtons[idx] = Btn
+    return Btn
+end
+
+local function switchTab(idx)
+    if activeTab == idx then return end
+    activeTab = idx
+
+    -- Update page title and subtitle
+    PageTitle.Text = TAB_NAMES[idx]
+    PageSubtitle.Text = TAB_SUBTITLES[idx]
+
+    -- Animate page title (slide + fade in)
+    PageTitle.Position = UDim2.new(0, 12, 0.5, -16)
+    PageTitle.TextTransparency = 1
+    tween(PageTitle, {Position = UDim2.new(0, 0, 0.5, -16), TextTransparency = 0}, 0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+
+    PageSubtitle.Position = UDim2.new(0, 12, 0.5, 6)
+    PageSubtitle.TextTransparency = 1
+    tween(PageSubtitle, {Position = UDim2.new(0, 0, 0.5, 6), TextTransparency = 0}, 0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+
+    -- Update sidebar button styles
+    for j, b in ipairs(TabButtons) do
+        if j == idx then
+            -- Active: filled background + white text
+            tween(b, {BackgroundTransparency = 0.3, TextColor3 = Theme.text}, 0.3, Enum.EasingStyle.Sine)
+        else
+            tween(b, {BackgroundTransparency = 1, TextColor3 = Theme.subtext}, 0.3, Enum.EasingStyle.Sine)
+        end
+    end
+
+    -- Page transitions
+    for j, page in ipairs(TabPages) do
+        if j == idx then
+            page.Visible = true
+            page.GroupTransparency = 1
+            page.Position = UDim2.new(0, 14, 0, 0)
+            tween(page, {GroupTransparency = 0, Position = UDim2.new(0, 0, 0, 0)}, 0.4, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        else
+            if page.Visible then
+                tween(page, {GroupTransparency = 1, Position = UDim2.new(0, -14, 0, 0)}, 0.25, Enum.EasingStyle.Sine, Enum.EasingDirection.In)
+                task.delay(0.25, function()
+                    if activeTab ~= j then page.Visible = false end
+                end)
+            end
+        end
+    end
+end
+
+-- ─── Tool spawner ────────────────────────────────────────
+local function giveTool(name, remoteFn)
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    if not backpack then
+        backpack = LocalPlayer:WaitForChild("Backpack", 5)
+    end
+    if not backpack then return nil end
+
+    local tool = Instance.new("Tool")
+    tool.Name = name
+    tool.RequiresHandle = false
+    tool.ToolTip = name .. " — click to fire"
+    tool.Parent = backpack
+
+    tool.Activated:Connect(function()
+        pcall(function()
+            local r = remoteFn()
+            if r and r:IsA("RemoteEvent") then r:FireServer() end
+        end)
+    end)
+
+    return tool
+end
+
+-- ─── Card builder ────────────────────────────────────────
+local function buildCard(parent, item, idx, isMove)
+    local Card = Instance.new("TextButton")
+    Card.Size = UDim2.new(1, -4, 0, 54)
+    Card.BackgroundColor3 = Theme.card
+    Card.BorderSizePixel = 0
+    Card.Text = ""
+    Card.LayoutOrder = idx
+    Card.ZIndex = 7
+    Card.Parent = parent
+    round(Card, 11)
+    stroke(Card, Theme.stroke, 1, 0.15)
+
+    local cardGradient = Instance.new("UIGradient")
+    cardGradient.Color = ColorSequence.new(Theme.card, Color3.fromRGB(20, 23, 36))
+    cardGradient.Rotation = 90
+    cardGradient.Parent = Card
+
+    local accentBar = Instance.new("Frame")
+    accentBar.Size = UDim2.new(0, 3, 1, -16)
+    accentBar.Position = UDim2.new(0, 8, 0.5, -19)
+    accentBar.BackgroundColor3 = item.color or Theme.accent
+    accentBar.BorderSizePixel = 0
+    accentBar.ZIndex = 8
+    accentBar.Parent = Card
+    round(accentBar, 2)
+
+    local accentGlow = Instance.new("UIStroke")
+    accentGlow.Color = item.color or Theme.accent
+    accentGlow.Thickness = 1.5
+    accentGlow.Transparency = 0.7
+    accentGlow.Parent = accentBar
+
+    local NameLabel = Instance.new("TextLabel")
+    NameLabel.Size = UDim2.new(1, -120, 0, 20)
+    NameLabel.Position = UDim2.new(0, 24, 0, 10)
+    NameLabel.BackgroundTransparency = 1
+    NameLabel.Font = Enum.Font.GothamSemibold
+    NameLabel.TextSize = 14
+    NameLabel.TextColor3 = Theme.text
+    NameLabel.TextXAlignment = Enum.TextXAlignment.Left
+    NameLabel.Text = item.name
+    NameLabel.ZIndex = 8
+    NameLabel.Parent = Card
+
+    local DescLabel = Instance.new("TextLabel")
+    DescLabel.Size = UDim2.new(1, -120, 0, 14)
+    DescLabel.Position = UDim2.new(0, 24, 0, 31)
+    DescLabel.BackgroundTransparency = 1
+    DescLabel.Font = Enum.Font.Gotham
+    DescLabel.TextSize = 11
+    DescLabel.TextColor3 = Theme.subtext
+    DescLabel.TextXAlignment = Enum.TextXAlignment.Left
+    DescLabel.Text = item.desc
+    DescLabel.ZIndex = 8
+    DescLabel.Parent = Card
+
+    local ActionBtn = Instance.new("TextLabel")
+    ActionBtn.Size = UDim2.new(0, 76, 0, 28)
+    ActionBtn.Position = UDim2.new(1, -88, 0.5, -14)
+    ActionBtn.BackgroundColor3 = item.color or Theme.accent
+    ActionBtn.BackgroundTransparency = 0.4
+    ActionBtn.BorderSizePixel = 0
+    ActionBtn.Font = Enum.Font.GothamBold
+    ActionBtn.TextSize = 11
+    ActionBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ActionBtn.Text = isMove and "Give tool" or "USE"
+    ActionBtn.ZIndex = 8
+    ActionBtn.Parent = Card
+    round(ActionBtn, 8)
+
+    Card.MouseEnter:Connect(function()
+        tween(Card, {BackgroundColor3 = Theme.cardHover}, 0.2, Enum.EasingStyle.Sine)
+        tween(ActionBtn, {BackgroundTransparency = 0.15}, 0.2, Enum.EasingStyle.Sine)
+        tween(accentGlow, {Transparency = 0.3}, 0.2, Enum.EasingStyle.Sine)
+    end)
+    Card.MouseLeave:Connect(function()
+        tween(Card, {BackgroundColor3 = Theme.card}, 0.25, Enum.EasingStyle.Sine)
+        tween(ActionBtn, {BackgroundTransparency = 0.4}, 0.25, Enum.EasingStyle.Sine)
+        tween(accentGlow, {Transparency = 0.7}, 0.25, Enum.EasingStyle.Sine)
+    end)
+
+    return Card, accentBar, ActionBtn, accentGlow
+end
+
+-- ─── Moves Page ──────────────────────────────────────────
+local function createMovesPage()
+    local Page = Instance.new("CanvasGroup")
+    Page.Size = UDim2.new(1, 0, 1, 0)
+    Page.BackgroundTransparency = 1
+    Page.GroupTransparency = 0
+    Page.Visible = false
+    Page.ZIndex = 5
+    Page.Parent = Content
+
+    local Scroll = Instance.new("ScrollingFrame")
+    Scroll.Size = UDim2.new(1, 0, 1, 0)
+    Scroll.BackgroundTransparency = 1
+    Scroll.BorderSizePixel = 0
+    Scroll.ScrollBarThickness = 3
+    Scroll.ScrollBarImageColor3 = Theme.accent
+    Scroll.ScrollBarImageTransparency = 0.5
+    Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    Scroll.ZIndex = 6
+    Scroll.Parent = Page
+
+    local Layout = Instance.new("UIListLayout")
+    Layout.FillDirection = Enum.FillDirection.Vertical
+    Layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    Layout.SortOrder = Enum.SortOrder.LayoutOrder
+    Layout.Padding = UDim.new(0, 6)
+    Layout.Parent = Scroll
+
+    -- ─── Perks category (Cool Yellow) ────────────────────
+    local PERKS_COLOR = Color3.fromRGB(255, 215, 70)  -- cool yellow
+    local PERKS = {
+        { name = "Sniper Smack",     desc = "Perks  •  Passive 1", remote = function() return ReplicatedStorage.Remotes.Perks.PerkPassives.Perk1 end },
+        { name = "Simple Punches",   desc = "Perks  •  Passive 2", remote = function() return ReplicatedStorage.Remotes.Perks.PerkPassives.Perk2 end },
+        { name = "Chain Whip",       desc = "Perks  •  Passive 3", remote = function() return ReplicatedStorage.Remotes.Perks.PerkPassives.Perk3 end },
+        { name = "Lazer Snipe",      desc = "Perks  •  Active 1",  remote = function() return ReplicatedStorage.Remotes.Perks.PerkRemotes.Perk1 end },
+        { name = "Aura Punch",       desc = "Perks  •  Active 2",  remote = function() return ReplicatedStorage.Remotes.Perks.PerkRemotes.Perk2 end },
+        { name = "Strings Attached", desc = "Perks  •  Active 3",  remote = function() return ReplicatedStorage.Remotes.Perks.PerkRemotes.Perk3 end },
+    }
+
+    -- ─── Kuroroshi category (Redish Pink) ───────────────
+    local KUROROSHI_COLOR = Color3.fromRGB(230, 90, 140)  -- redish pink
+    local KUROROSHI = {
+        { name = "Festering",  desc = "Kuroroshi  •  Move", remote = function() return ReplicatedStorage.Remotes.kurakoshi.festering end },
+        { name = "Supplement", desc = "Kuroroshi  •  Move", remote = function() return ReplicatedStorage.Remotes.kurakoshi.supllemant end },
+        { name = "Tarnish",    desc = "Kuroroshi  •  Move", remote = function() return ReplicatedStorage.Remotes.kurakoshi.tarnish end },
+    }
+
+    -- Helper: build an accordion category
+    local function buildCategory(categoryName, categoryColor, moves, orderStart)
+        -- Header button
+        local Header = Instance.new("TextButton")
+        Header.Size = UDim2.new(1, -4, 0, 44)
+        Header.BackgroundColor3 = Theme.card
+        Header.BorderSizePixel = 0
+        Header.Font = Enum.Font.GothamBold
+        Header.TextSize = 13
+        Header.TextColor3 = Theme.text
+        Header.TextXAlignment = Enum.TextXAlignment.Left
+        Header.Text = "  ▶  " .. categoryName .. "  (" .. #moves .. " moves)"
+        Header.LayoutOrder = orderStart
+        Header.ZIndex = 7
+        Header.Parent = Scroll
+        round(Header, 11)
+        stroke(Header, Theme.stroke, 1, 0.15)
+
+        local headerAccent = Instance.new("Frame")
+        headerAccent.Size = UDim2.new(0, 3, 1, -12)
+        headerAccent.Position = UDim2.new(0, 6, 0.5, -16)
+        headerAccent.BackgroundColor3 = categoryColor
+        headerAccent.BorderSizePixel = 0
+        headerAccent.ZIndex = 8
+        headerAccent.Parent = Header
+        round(headerAccent, 2)
+
+        local countBadge = Instance.new("TextLabel")
+        countBadge.Size = UDim2.new(0, 50, 0, 22)
+        countBadge.Position = UDim2.new(1, -58, 0.5, -11)
+        countBadge.BackgroundColor3 = categoryColor
+        countBadge.BackgroundTransparency = 0.5
+        countBadge.BorderSizePixel = 0
+        countBadge.Font = Enum.Font.GothamBold
+        countBadge.TextSize = 10
+        countBadge.TextColor3 = Color3.fromRGB(255, 255, 255)
+        countBadge.Text = #moves .. " moves"
+        countBadge.ZIndex = 8
+        countBadge.Parent = Header
+        round(countBadge, 6)
+
+        -- Body container (hidden by default)
+        local Body = Instance.new("Frame")
+        Body.Size = UDim2.new(1, -4, 0, 0)
+        Body.BackgroundTransparency = 1
+        Body.BorderSizePixel = 0
+        Body.LayoutOrder = orderStart + 1
+        Body.ZIndex = 7
+        Body.Visible = false
+        Body.Parent = Scroll
+        Body.AutomaticSize = Enum.AutomaticSize.Y
+
+        local bodyLayout = Instance.new("UIListLayout")
+        bodyLayout.FillDirection = Enum.FillDirection.Vertical
+        bodyLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        bodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        bodyLayout.Padding = UDim.new(0, 4)
+        bodyLayout.Parent = Body
+
+        -- Build move cards inside the body
+        for mi, move in ipairs(moves) do
+            local moveItem = { name = move.name, desc = categoryName .. " Move", color = categoryColor, remote = move.remote }
+            local Card, accentBar, ActionBtn, accentGlow = buildCard(Body, moveItem, mi, true)
+
+            Card.MouseButton1Click:Connect(function()
+                tween(Card, {Size = UDim2.new(1, -4, 0, 50)}, 0.1, Enum.EasingStyle.Sine, Enum.EasingDirection.In)
+                task.delay(0.1, function()
+                    tween(Card, {Size = UDim2.new(1, -4, 0, 54)}, 0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+                end)
+
+                pcall(function() giveTool(move.name, move.remote) end)
+
+                -- Flash GREEN — accent bar + glow outline + button text
+                tween(accentBar, {BackgroundColor3 = Theme.success}, 0.15, Enum.EasingStyle.Sine)
+                tween(accentGlow, {Color = Theme.success}, 0.15, Enum.EasingStyle.Sine)
+                tween(ActionBtn, {TextColor3 = Theme.success}, 0.15, Enum.EasingStyle.Sine)
+                ActionBtn.Text = "Given!"
+
+                task.spawn(function()
+                    task.wait(1)
+                    tween(accentBar, {BackgroundColor3 = categoryColor}, 0.6, Enum.EasingStyle.Quart)
+                    tween(accentGlow, {Color = categoryColor}, 0.6, Enum.EasingStyle.Quart)
+                    tween(ActionBtn, {TextColor3 = Color3.fromRGB(255, 255, 255)}, 0.6, Enum.EasingStyle.Quart)
+                    task.wait(0.6)
+                    ActionBtn.Text = "Give tool"
+                end)
+            end)
+        end
+
+        -- Toggle body on header click
+        local expanded = false
+        Header.MouseButton1Click:Connect(function()
+            expanded = not expanded
+            Body.Visible = expanded
+            if expanded then
+                Header.Text = "  ▼  " .. categoryName .. "  (" .. #moves .. " moves)"
+                tween(Header, {BackgroundColor3 = Theme.cardHover}, 0.2, Enum.EasingStyle.Sine)
+            else
+                Header.Text = "  ▶  " .. categoryName .. "  (" .. #moves .. " moves)"
+                tween(Header, {BackgroundColor3 = Theme.card}, 0.2, Enum.EasingStyle.Sine)
+            end
+        end)
+
+        Header.MouseEnter:Connect(function()
+            if not expanded then
+                tween(Header, {BackgroundColor3 = Theme.cardHover}, 0.2, Enum.EasingStyle.Sine)
+            end
+        end)
+        Header.MouseLeave:Connect(function()
+            if not expanded then
+                tween(Header, {BackgroundColor3 = Theme.card}, 0.25, Enum.EasingStyle.Sine)
+            end
+        end)
+    end
+
+    -- Build Perks category first (order 1-2)
+    buildCategory("Perks", PERKS_COLOR, PERKS, 1)
+
+    -- Build Kuroroshi category (order 3-4)
+    buildCategory("Kuroroshi", KUROROSHI_COLOR, KUROROSHI, 3)
+
+    -- Build character accordions (order 5+)
+    local charOrder = 5
+    for _, char in ipairs(ULTS) do
+        -- Skip characters with no extra moves (or only 1 remote = ult handler)
+        if #char.extraMoves > 0 then
+            buildCategory(char.name, char.color, char.extraMoves, charOrder)
+            charOrder = charOrder + 2
+        end
+    end
+
+    local Hint = Instance.new("TextLabel")
+    Hint.Size = UDim2.new(1, 0, 0, 20)
+    Hint.BackgroundTransparency = 1
+    Hint.Font = Enum.Font.Gotham
+    Hint.TextSize = 10
+    Hint.TextColor3 = Theme.subtext
+    Hint.Text = "Click a character to expand their moves"
+    Hint.LayoutOrder = 999
+    Hint.ZIndex = 7
+    Hint.Parent = Scroll
+
+    return Page
+end
+
+-- ─── Notification System (slide in from right, plays sound) ──
+local function showNotification(message, duration)
+    duration = duration or 3
+
+    -- Play notification sound
+    task.spawn(function()
+        pcall(function()
+            local s = Instance.new("Sound")
+            s.SoundId = "rbxassetid://129976960969174"
+            s.Volume = 0.6
+            s.Parent = ScreenGui
+            s:Play()
+            task.delay(5, function() if s and s.Parent then s:Destroy() end end)
+        end)
+    end)
+
+    local Notif = Instance.new("Frame")
+    Notif.Size = UDim2.new(0, 340, 0, 56)
+    Notif.Position = UDim2.new(1, 360, 1, -80)
+    Notif.BackgroundColor3 = Theme.card
+    Notif.BorderSizePixel = 0
+    Notif.ZIndex = 200
+    Notif.Parent = ScreenGui
+    round(Notif, 12)
+    stroke(Notif, Theme.accent, 1.5, 0)
+
+    -- Gradient overlay for depth
+    local notifGradient = Instance.new("UIGradient")
+    notifGradient.Color = ColorSequence.new(Theme.card, Color3.fromRGB(20, 23, 36))
+    notifGradient.Rotation = 90
+    notifGradient.Parent = Notif
+
+    -- Accent bar (left side)
+    local NotifGlow = Instance.new("Frame")
+    NotifGlow.Size = UDim2.new(0, 4, 1, -14)
+    NotifGlow.Position = UDim2.new(0, 6, 0.5, -21)
+    NotifGlow.BackgroundColor3 = Theme.accent
+    NotifGlow.BorderSizePixel = 0
+    NotifGlow.ZIndex = 201
+    NotifGlow.Parent = Notif
+    round(NotifGlow, 2)
+
+    -- Notification text (directly on the notification, clearly visible)
+    local NotifText = Instance.new("TextLabel")
+    NotifText.Size = UDim2.new(1, -24, 1, 0)
+    NotifText.Position = UDim2.new(0, 18, 0, 0)
+    NotifText.BackgroundTransparency = 1
+    NotifText.Font = Enum.Font.GothamMedium
+    NotifText.TextSize = 13
+    NotifText.TextColor3 = Theme.text
+    NotifText.TextWrapped = true
+    NotifText.TextXAlignment = Enum.TextXAlignment.Left
+    NotifText.TextYAlignment = Enum.TextYAlignment.Center
+    NotifText.Text = message
+    NotifText.ZIndex = 201
+    NotifText.Parent = Notif
+
+    -- Slide in from right (springy)
+    tween(Notif, {Position = UDim2.new(1, -360, 1, -80)}, 0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+    -- Slide out after duration
+    task.delay(duration, function()
+        tween(Notif, {Position = UDim2.new(1, 360, 1, -80)}, 0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+        task.delay(0.5, function()
+            if Notif and Notif.Parent then Notif:Destroy() end
+        end)
+    end)
+end
+
+-- ─── Ultimates Page ──────────────────────────────────────
+local function createUltsPage()
+    local Page = Instance.new("CanvasGroup")
+    Page.Size = UDim2.new(1, 0, 1, 0)
+    Page.BackgroundTransparency = 1
+    Page.GroupTransparency = 0
+    Page.Visible = false
+    Page.ZIndex = 5
+    Page.Parent = Content
+
+    local Scroll = Instance.new("ScrollingFrame")
+    Scroll.Size = UDim2.new(1, 0, 1, 0)
+    Scroll.BackgroundTransparency = 1
+    Scroll.BorderSizePixel = 0
+    Scroll.ScrollBarThickness = 3
+    Scroll.ScrollBarImageColor3 = Theme.accent
+    Scroll.ScrollBarImageTransparency = 0.5
+    Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    Scroll.ZIndex = 6
+    Scroll.Parent = Page
+
+    local Layout = Instance.new("UIListLayout")
+    Layout.FillDirection = Enum.FillDirection.Vertical
+    Layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    Layout.SortOrder = Enum.SortOrder.LayoutOrder
+    Layout.Padding = UDim.new(0, 6)
+    Layout.Parent = Scroll
+
+    for i, item in ipairs(ULTS) do
+        local Card, accentBar, ActionBtn, accentGlow = buildCard(Scroll, item, i, false)
+
+        Card.MouseButton1Click:Connect(function()
+            tween(Card, {Size = UDim2.new(1, -4, 0, 50)}, 0.1, Enum.EasingStyle.Sine, Enum.EasingDirection.In)
+            task.delay(0.1, function()
+                tween(Card, {Size = UDim2.new(1, -4, 0, 54)}, 0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+            end)
+
+            -- Play custom click sound if defined (Yuta)
+            if item.clickSound then
+                task.spawn(function()
+                    pcall(function()
+                        local s = Instance.new("Sound")
+                        s.SoundId = "rbxassetid://" .. item.clickSound
+                        s.Volume = 0.6
+                        s.Parent = SoundHolder
+                        s:Play()
+                        task.delay(5, function() if s and s.Parent then s:Destroy() end end)
+                    end)
+                end)
+            end
+
+            -- Show notification if defined (Yuta only)
+            if item.notification then
+                showNotification(item.notification, 3)
+            end
+
+            for _, remoteFn in ipairs(item.instantRemotes) do
+                task.spawn(function()
+                    pcall(function()
+                        local r = remoteFn()
+                        if r and r:IsA("RemoteEvent") then r:FireServer() end
+                    end)
+                end)
+            end
+
+            for _, move in ipairs(item.extraMoves) do
+                task.spawn(function()
+                    pcall(function() giveTool(move.name, move.remote) end)
+                end)
+            end
+
+            -- Flash GREEN — accent bar + glow outline + button text
+            tween(accentBar, {BackgroundColor3 = Theme.success}, 0.15, Enum.EasingStyle.Sine)
+            tween(accentGlow, {Color = Theme.success}, 0.15, Enum.EasingStyle.Sine)
+            tween(ActionBtn, {TextColor3 = Theme.success}, 0.15, Enum.EasingStyle.Sine)
+            ActionBtn.Text = "USED!"
+
+            task.spawn(function()
+                task.wait(1)
+                tween(accentBar, {BackgroundColor3 = item.color}, 0.6, Enum.EasingStyle.Quart)
+                tween(accentGlow, {Color = item.color}, 0.6, Enum.EasingStyle.Quart)
+                tween(ActionBtn, {TextColor3 = Color3.fromRGB(255, 255, 255)}, 0.6, Enum.EasingStyle.Quart)
+                task.wait(0.6)
+                ActionBtn.Text = "USE"
+            end)
+        end)
+    end
+
+    -- "Clear all moves in inventory" button at the bottom
+    local ClearBtn = Instance.new("TextButton")
+    ClearBtn.Size = UDim2.new(1, -4, 0, 40)
+    ClearBtn.BackgroundColor3 = Theme.danger
+    ClearBtn.BackgroundTransparency = 0.65
+    ClearBtn.BorderSizePixel = 0
+    ClearBtn.Font = Enum.Font.GothamBold
+    ClearBtn.TextSize = 12
+    ClearBtn.TextColor3 = Color3.fromRGB(255, 200, 200)
+    ClearBtn.Text = "🗑  Clear all moves in inventory"
+    ClearBtn.LayoutOrder = 998
+    ClearBtn.ZIndex = 7
+    ClearBtn.Parent = Scroll
+    round(ClearBtn, 10)
+    stroke(ClearBtn, Theme.danger, 1, 0.3)
+
+    ClearBtn.MouseEnter:Connect(function()
+        tween(ClearBtn, {BackgroundTransparency = 0.4}, 0.2, Enum.EasingStyle.Sine)
+    end)
+    ClearBtn.MouseLeave:Connect(function()
+        tween(ClearBtn, {BackgroundTransparency = 0.65}, 0.25, Enum.EasingStyle.Sine)
+    end)
+    ClearBtn.MouseButton1Click:Connect(function()
+        tween(ClearBtn, {Size = UDim2.new(1, -4, 0, 36)}, 0.1, Enum.EasingStyle.Sine, Enum.EasingDirection.In)
+        task.delay(0.1, function()
+            tween(ClearBtn, {Size = UDim2.new(1, -4, 0, 40)}, 0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        end)
+        -- Remove all Tools from Backpack and Character
+        task.spawn(function()
+            pcall(function()
+                local backpack = LocalPlayer:FindFirstChild("Backpack")
+                if backpack then
+                    for _, t in ipairs(backpack:GetChildren()) do
+                        if t:IsA("Tool") then t:Destroy() end
+                    end
+                end
+                local char = LocalPlayer.Character
+                if char then
+                    for _, t in ipairs(char:GetChildren()) do
+                        if t:IsA("Tool") then t:Destroy() end
+                    end
+                end
+            end)
+        end)
+    end)
+
+    local Hint = Instance.new("TextLabel")
+    Hint.Size = UDim2.new(1, 0, 0, 20)
+    Hint.BackgroundTransparency = 1
+    Hint.Font = Enum.Font.Gotham
+    Hint.TextSize = 10
+    Hint.TextColor3 = Theme.subtext
+    Hint.Text = "Click USE to fire — extra moves go to your backpack"
+    Hint.LayoutOrder = 999
+    Hint.ZIndex = 7
+    Hint.Parent = Scroll
+
+    return Page
+end
+
+-- ─── Credits Page ────────────────────────────────────────
+local function createCreditsPage()
+    local Page = Instance.new("CanvasGroup")
+    Page.Size = UDim2.new(1, 0, 1, 0)
+    Page.BackgroundTransparency = 1
+    Page.GroupTransparency = 0
+    Page.Visible = false
+    Page.ZIndex = 5
+    Page.Parent = Content
+
+    local ThanksLabel = Instance.new("TextLabel")
+    ThanksLabel.Size = UDim2.new(1, 0, 0, 22)
+    ThanksLabel.Position = UDim2.new(0, 0, 0, 18)
+    ThanksLabel.BackgroundTransparency = 1
+    ThanksLabel.Font = Enum.Font.GothamMedium
+    ThanksLabel.TextSize = 13
+    ThanksLabel.TextColor3 = Theme.subtext
+    ThanksLabel.Text = "Thanks for using Sorcery Hub"
+    ThanksLabel.ZIndex = 6
+    ThanksLabel.Parent = Page
+
+    local AvatarRing = Instance.new("Frame")
+    AvatarRing.Size = UDim2.new(0, 104, 0, 104)
+    AvatarRing.Position = UDim2.new(0.5, -52, 0.5, -57)
+    AvatarRing.BackgroundColor3 = Theme.accent
+    AvatarRing.BorderSizePixel = 0
+    AvatarRing.ZIndex = 6
+    AvatarRing.Parent = Page
+    round(AvatarRing, 52)
+    gradient(AvatarRing, Theme.accent, Theme.accent2, 45)
+    stroke(AvatarRing, Theme.accentLight, 2, 0.1)
+
+    local Avatar = Instance.new("ImageLabel")
+    Avatar.Size = UDim2.new(0, 90, 0, 90)
+    Avatar.Position = UDim2.new(0.5, -45, 0.5, -50)
+    Avatar.BackgroundColor3 = Theme.bg
+    Avatar.BorderSizePixel = 0
+    Avatar.Image = "rbxthumb://type=AvatarHeadShot&id=7861093209&w=420&h=420"
+    Avatar.ZIndex = 7
+    Avatar.Parent = Page
+    local ac = Instance.new("UICorner")
+    ac.CornerRadius = UDim.new(0.5, 0)
+    ac.Parent = Avatar
+
+    local NameLabel = Instance.new("TextLabel")
+    NameLabel.Size = UDim2.new(1, 0, 0, 28)
+    NameLabel.Position = UDim2.new(0, 0, 0.5, 52)
+    NameLabel.BackgroundTransparency = 1
+    NameLabel.Font = Enum.Font.GothamBold
+    NameLabel.TextSize = 22
+    NameLabel.TextColor3 = Theme.text
+    NameLabel.Text = "Poleeater"
+    NameLabel.ZIndex = 6
+    NameLabel.Parent = Page
+
+    local RoleLabel = Instance.new("TextLabel")
+    RoleLabel.Size = UDim2.new(1, 0, 0, 18)
+    RoleLabel.Position = UDim2.new(0, 0, 0.5, 82)
+    RoleLabel.BackgroundTransparency = 1
+    RoleLabel.Font = Enum.Font.Gotham
+    RoleLabel.TextSize = 12
+    RoleLabel.TextColor3 = Theme.subtext
+    RoleLabel.Text = "Developer  •  Script Author"
+    RoleLabel.ZIndex = 6
+    RoleLabel.Parent = Page
+
+    local VersionLabel = Instance.new("TextLabel")
+    VersionLabel.Size = UDim2.new(1, 0, 0, 16)
+    VersionLabel.Position = UDim2.new(0, 0, 1, -22)
+    VersionLabel.BackgroundTransparency = 1
+    VersionLabel.Font = Enum.Font.Gotham
+    VersionLabel.TextSize = 10
+    VersionLabel.TextColor3 = Theme.subtext
+    VersionLabel.Text = "Sorcery Hub  v1.2"
+    VersionLabel.ZIndex = 6
+    VersionLabel.Parent = Page
+
+    return Page
+end
+
+-- ─── Settings Page ───────────────────────────────────────
+local function createSettingsPage()
+    local Page = Instance.new("CanvasGroup")
+    Page.Size = UDim2.new(1, 0, 1, 0)
+    Page.BackgroundTransparency = 1
+    Page.GroupTransparency = 0
+    Page.Visible = false
+    Page.ZIndex = 5
+    Page.Parent = Content
+
+    local Scroll = Instance.new("ScrollingFrame")
+    Scroll.Size = UDim2.new(1, 0, 1, 0)
+    Scroll.BackgroundTransparency = 1
+    Scroll.BorderSizePixel = 0
+    Scroll.ScrollBarThickness = 3
+    Scroll.ScrollBarImageColor3 = Theme.accent
+    Scroll.ScrollBarImageTransparency = 0.5
+    Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    Scroll.ZIndex = 6
+    Scroll.Parent = Page
+
+    local Layout = Instance.new("UIListLayout")
+    Layout.FillDirection = Enum.FillDirection.Vertical
+    Layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    Layout.SortOrder = Enum.SortOrder.LayoutOrder
+    Layout.Padding = UDim.new(0, 6)
+    Layout.Parent = Scroll
+
+    local orderCounter = 1
+
+    local function sectionLabel(text)
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -4, 0, 20)
+        lbl.BackgroundTransparency = 1
+        lbl.Font = Enum.Font.GothamBold
+        lbl.TextSize = 10
+        lbl.TextColor3 = Theme.subtext
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Text = "  " .. text
+        lbl.LayoutOrder = orderCounter
+        lbl.ZIndex = 7
+        lbl.Parent = Scroll
+        orderCounter = orderCounter + 1
+    end
+
+    local function makeSettingButton(text, color, onClick)
+        local Btn = Instance.new("TextButton")
+        Btn.Size = UDim2.new(1, -4, 0, 44)
+        Btn.BackgroundColor3 = color
+        Btn.BackgroundTransparency = 0.6
+        Btn.BorderSizePixel = 0
+        Btn.Font = Enum.Font.GothamBold
+        Btn.TextSize = 12
+        Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Btn.Text = text
+        Btn.LayoutOrder = orderCounter
+        Btn.ZIndex = 7
+        Btn.Parent = Scroll
+        round(Btn, 11)
+        stroke(Btn, color, 1, 0.2)
+        orderCounter = orderCounter + 1
+
+        Btn.MouseEnter:Connect(function()
+            tween(Btn, {BackgroundTransparency = 0.35}, 0.2, Enum.EasingStyle.Sine)
+        end)
+        Btn.MouseLeave:Connect(function()
+            tween(Btn, {BackgroundTransparency = 0.6}, 0.25, Enum.EasingStyle.Sine)
+        end)
+        Btn.MouseButton1Click:Connect(function()
+            tween(Btn, {Size = UDim2.new(1, -4, 0, 40)}, 0.1, Enum.EasingStyle.Sine, Enum.EasingDirection.In)
+            task.delay(0.1, function()
+                tween(Btn, {Size = UDim2.new(1, -4, 0, 44)}, 0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+            end)
+            onClick()
+        end)
+        return Btn
+    end
+
+    -- ─── ACTIONS section ────────────────────────────────
+    sectionLabel("ACTIONS")
+
+    makeSettingButton("Show Update Log", Theme.accentLight, function()
+        if UpdateLogPopup then
+            UpdateLogPopup.Visible = true
+            UpdateLogPopup.GroupTransparency = 1
+            tween(UpdateLogPopup, {GroupTransparency = 0}, 0.3)
+        end
+    end)
+
+    makeSettingButton("Unload GUI", Theme.danger, function()
+        if ScreenGui then ScreenGui:Destroy() end
+    end)
+
+    -- ─── KEYBIND section ────────────────────────────────
+    sectionLabel("KEYBIND")
+
+    keybindButton = Instance.new("TextButton")
+    keybindButton.Size = UDim2.new(1, -4, 0, 44)
+    keybindButton.BackgroundColor3 = Theme.accent
+    keybindButton.BackgroundTransparency = 0.45
+    keybindButton.BorderSizePixel = 0
+    keybindButton.Font = Enum.Font.GothamBold
+    keybindButton.TextSize = 12
+    keybindButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    keybindButton.Text = "Toggle Key:  " .. hideKeybind.Name
+    keybindButton.LayoutOrder = orderCounter
+    keybindButton.ZIndex = 7
+    keybindButton.Parent = Scroll
+    round(keybindButton, 11)
+    stroke(keybindButton, Theme.accent, 1, 0.2)
+    orderCounter = orderCounter + 1
+
+    keybindButton.MouseEnter:Connect(function()
+        if not waitingForKey then
+            tween(keybindButton, {BackgroundTransparency = 0.25}, 0.2, Enum.EasingStyle.Sine)
+        end
+    end)
+    keybindButton.MouseLeave:Connect(function()
+        if not waitingForKey then
+            tween(keybindButton, {BackgroundTransparency = 0.45}, 0.25, Enum.EasingStyle.Sine)
+        end
+    end)
+
+    keybindButton.MouseButton1Click:Connect(function()
+        if waitingForKey then return end
+        waitingForKey = true
+        keybindButton.Text = "Press any key..."
+        tween(keybindButton, {BackgroundColor3 = Theme.success, BackgroundTransparency = 0.25}, 0.2)
+
+        local connection
+        connection = UserInputService.InputBegan:Connect(function(input, gpe)
+            if gpe then return end
+            if input.UserInputType == Enum.UserInputType.Keyboard then
+                hideKeybind = input.KeyCode
+                waitingForKey = false
+                keybindButton.Text = "Toggle Key:  " .. hideKeybind.Name
+                tween(keybindButton, {BackgroundColor3 = Theme.accent, BackgroundTransparency = 0.45}, 0.2)
+                SideFooter.Text = hideKeybind.Name .. " to toggle  •  by Poleeater"
+                connection:Disconnect()
+            end
+        end)
+
+        task.delay(5, function()
+            if waitingForKey then
+                waitingForKey = false
+                keybindButton.Text = "Toggle Key:  " .. hideKeybind.Name
+                tween(keybindButton, {BackgroundColor3 = Theme.accent, BackgroundTransparency = 0.45}, 0.2)
+                if connection then connection:Disconnect() end
+            end
+        end)
+    end)
+
+    -- ─── INFO section ───────────────────────────────────
+    sectionLabel("INFO")
+
+    local InfoText = Instance.new("TextLabel")
+    InfoText.Size = UDim2.new(1, -4, 0, 60)
+    InfoText.BackgroundTransparency = 1
+    InfoText.Font = Enum.Font.Gotham
+    InfoText.TextSize = 11
+    InfoText.TextColor3 = Theme.subtext
+    InfoText.TextXAlignment = Enum.TextXAlignment.Left
+    InfoText.Text = "  Drag top bar or sidebar to move\n  Minimize button for mobile\n  Click keybind button to rebind\n  Made by Poleeater"
+    InfoText.TextYAlignment = Enum.TextYAlignment.Top
+    InfoText.LayoutOrder = orderCounter
+    InfoText.ZIndex = 7
+    InfoText.Parent = Scroll
+
+    return Page
+end
+
+-- ═══ ADMIN ACTION POPUP ═══════════════════════════════════
+local function showActionPopup(player)
+    -- Close any existing popup
+    local existing = ScreenGui:FindFirstChild("ActionPopup")
+    if existing then existing:Destroy() end
+
+    local Dim = Instance.new("TextButton")
+    Dim.Name = "ActionPopup"
+    Dim.Size = UDim2.new(1, 0, 1, 0)
+    Dim.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    Dim.BackgroundTransparency = 0.5
+    Dim.Text = ""
+    Dim.ZIndex = 150
+    Dim.Active = true
+    Dim.Parent = ScreenGui
+
+    local Popup = Instance.new("Frame")
+    Popup.Size = UDim2.new(0, 300, 0, 440)
+    Popup.Position = UDim2.new(0.5, -150, 0.5, -220)
+    Popup.BackgroundColor3 = Theme.bg
+    Popup.BorderSizePixel = 0
+    Popup.ZIndex = 151
+    Popup.Parent = Dim
+    round(Popup, 16)
+    stroke(Popup, Theme.accent, 2, 0)
+
+    local PopupGlow = Instance.new("Frame")
+    PopupGlow.Size = UDim2.new(1, 0, 0, 2)
+    PopupGlow.BackgroundColor3 = Theme.accent
+    PopupGlow.BorderSizePixel = 0
+    PopupGlow.ZIndex = 152
+    PopupGlow.Parent = Popup
+    gradient(PopupGlow, Theme.accent, Theme.accent2, 0)
+    round(PopupGlow, 2)
+
+    -- Player header
+    local PlayerIcon = Instance.new("ImageLabel")
+    PlayerIcon.Size = UDim2.new(0, 50, 0, 50)
+    PlayerIcon.Position = UDim2.new(0, 20, 0, 20)
+    PlayerIcon.BackgroundColor3 = Theme.bgLight
+    PlayerIcon.BorderSizePixel = 0
+    PlayerIcon.Image = "rbxthumb://type=AvatarHeadShot&id=" .. player.UserId .. "&w=150&h=150"
+    PlayerIcon.ZIndex = 152
+    PlayerIcon.Parent = Popup
+    round(PlayerIcon, 25)
+
+    local PopupName = Instance.new("TextLabel")
+    PopupName.Size = UDim2.new(1, -90, 0, 22)
+    PopupName.Position = UDim2.new(0, 80, 0, 22)
+    PopupName.BackgroundTransparency = 1
+    PopupName.Font = Enum.Font.GothamBold
+    PopupName.TextSize = 15
+    PopupName.TextColor3 = Theme.text
+    PopupName.TextXAlignment = Enum.TextXAlignment.Left
+    PopupName.Text = player.DisplayName
+    PopupName.ZIndex = 152
+    PopupName.Parent = Popup
+
+    local PopupUser = Instance.new("TextLabel")
+    PopupUser.Size = UDim2.new(1, -90, 0, 16)
+    PopupUser.Position = UDim2.new(0, 80, 0, 44)
+    PopupUser.BackgroundTransparency = 1
+    PopupUser.Font = Enum.Font.Gotham
+    PopupUser.TextSize = 11
+    PopupUser.TextColor3 = Theme.subtext
+    PopupUser.TextXAlignment = Enum.TextXAlignment.Left
+    PopupUser.Text = "@" .. player.Name
+    PopupUser.ZIndex = 152
+    PopupUser.Parent = Popup
+
+    -- Status badges
+    local badgeY = 78
+    if isScriptUser(player) then
+        local Badge = Instance.new("TextLabel")
+        Badge.Size = UDim2.new(0, 90, 0, 20)
+        Badge.Position = UDim2.new(0, 20, 0, badgeY)
+        Badge.BackgroundColor3 = Theme.accent
+        Badge.BackgroundTransparency = 0.5
+        Badge.BorderSizePixel = 0
+        Badge.Font = Enum.Font.GothamBold
+        Badge.TextSize = 9
+        Badge.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Badge.Text = "SCRIPT USER"
+        Badge.ZIndex = 152
+        Badge.Parent = Popup
+        round(Badge, 5)
+        badgeY = badgeY + 24
+    end
+    if checkIsAdmin(player) then
+        local Badge = Instance.new("TextLabel")
+        Badge.Size = UDim2.new(0, 60, 0, 20)
+        Badge.Position = UDim2.new(0, 20, 0, badgeY)
+        Badge.BackgroundColor3 = Theme.accentLight
+        Badge.BackgroundTransparency = 0.5
+        Badge.BorderSizePixel = 0
+        Badge.Font = Enum.Font.GothamBold
+        Badge.TextSize = 9
+        Badge.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Badge.Text = "ADMIN"
+        Badge.ZIndex = 152
+        Badge.Parent = Popup
+        round(Badge, 5)
+        badgeY = badgeY + 24
+    end
+    local pBanned = isPlayerBanned(player)
+    if pBanned then
+        local Badge = Instance.new("TextLabel")
+        Badge.Size = UDim2.new(0, 70, 0, 20)
+        Badge.Position = UDim2.new(0, 20, 0, badgeY)
+        Badge.BackgroundColor3 = Theme.danger
+        Badge.BackgroundTransparency = 0.5
+        Badge.BorderSizePixel = 0
+        Badge.Font = Enum.Font.GothamBold
+        Badge.TextSize = 9
+        Badge.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Badge.Text = "BANNED"
+        Badge.ZIndex = 152
+        Badge.Parent = Popup
+        round(Badge, 5)
+        badgeY = badgeY + 24
+    end
+    if frozenPlayers[player.UserId] then
+        local Badge = Instance.new("TextLabel")
+        Badge.Size = UDim2.new(0, 60, 0, 20)
+        Badge.Position = UDim2.new(0, 20, 0, badgeY)
+        Badge.BackgroundColor3 = Color3.fromRGB(100, 180, 255)
+        Badge.BackgroundTransparency = 0.5
+        Badge.BorderSizePixel = 0
+        Badge.Font = Enum.Font.GothamBold
+        Badge.TextSize = 9
+        Badge.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Badge.Text = "FROZEN"
+        Badge.ZIndex = 152
+        Badge.Parent = Popup
+        round(Badge, 5)
+    end
+
+    -- Action buttons
+    local actionsY = 130
+    local function makeActionButton(text, color, icon, onClick)
+        local Btn = Instance.new("TextButton")
+        Btn.Size = UDim2.new(1, -40, 0, 38)
+        Btn.Position = UDim2.new(0, 20, 0, actionsY)
+        Btn.BackgroundColor3 = color
+        Btn.BackgroundTransparency = 0.55
+        Btn.BorderSizePixel = 0
+        Btn.Font = Enum.Font.GothamBold
+        Btn.TextSize = 12
+        Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Btn.Text = icon .. "  " .. text
+        Btn.TextXAlignment = Enum.TextXAlignment.Left
+        Btn.ZIndex = 152
+        Btn.Parent = Popup
+        round(Btn, 9)
+        stroke(Btn, color, 1, 0.2)
+
+        local paddingLeft = Instance.new("UIPadding")
+        paddingLeft.PaddingLeft = UDim.new(0, 14)
+        paddingLeft.Parent = Btn
+
+        Btn.MouseEnter:Connect(function()
+            tween(Btn, {BackgroundTransparency = 0.3}, 0.2, Enum.EasingStyle.Sine)
+        end)
+        Btn.MouseLeave:Connect(function()
+            tween(Btn, {BackgroundTransparency = 0.55}, 0.25, Enum.EasingStyle.Sine)
+        end)
+        Btn.MouseButton1Click:Connect(function()
+            tween(Btn, {Size = UDim2.new(1, -40, 0, 34)}, 0.1, Enum.EasingStyle.Sine, Enum.EasingDirection.In)
+            task.delay(0.1, function()
+                tween(Btn, {Size = UDim2.new(1, -40, 0, 38)}, 0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+            end)
+            onClick()
+        end)
+
+        actionsY = actionsY + 42
+        return Btn
+    end
+
+    makeActionButton("Kick", Theme.danger, "✕", function()
+        adminKick(player)
+        showNotification("Kicked " .. player.Name, 2)
+    end)
+
+    makeActionButton("Bring", Theme.accent, "→", function()
+        adminBring(player)
+        showNotification("Bringing " .. player.Name, 2)
+    end)
+
+    makeActionButton("Goto", Theme.accentLight, "←", function()
+        adminGoto(player)
+        showNotification("Going to " .. player.Name, 2)
+    end)
+
+    -- Ban button → opens ban duration sub-popup
+    makeActionButton("Ban", Theme.danger, "⛔", function()
+        -- Create ban duration popup on top
+        local BanDim = Instance.new("TextButton")
+        BanDim.Size = UDim2.new(1, 0, 1, 0)
+        BanDim.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+        BanDim.BackgroundTransparency = 0.6
+        BanDim.Text = ""
+        BanDim.ZIndex = 160
+        BanDim.Active = true
+        BanDim.Parent = ScreenGui
+
+        local BanPopup = Instance.new("Frame")
+        BanPopup.Size = UDim2.new(0, 320, 0, 460)
+        BanPopup.Position = UDim2.new(0.5, -160, 0.5, -230)
+        BanPopup.BackgroundColor3 = Theme.bg
+        BanPopup.BorderSizePixel = 0
+        BanPopup.ZIndex = 161
+        BanPopup.Active = true
+        BanPopup.Parent = BanDim
+        round(BanPopup, 16)
+        stroke(BanPopup, Theme.danger, 1.5, 0.1)
+
+        -- Top accent bar
+        local BanAccent = Instance.new("Frame")
+        BanAccent.Size = UDim2.new(1, 0, 0, 3)
+        BanAccent.BackgroundColor3 = Theme.danger
+        BanAccent.BorderSizePixel = 0
+        BanAccent.ZIndex = 162
+        BanAccent.Parent = BanPopup
+        round(BanAccent, 2)
+
+        -- Close button (×) top right
+        local BanClose = Instance.new("TextButton")
+        BanClose.Size = UDim2.new(0, 28, 0, 28)
+        BanClose.Position = UDim2.new(1, -36, 0, 10)
+        BanClose.BackgroundColor3 = Theme.card
+        BanClose.BorderSizePixel = 0
+        BanClose.Font = Enum.Font.GothamBold
+        BanClose.TextSize = 16
+        BanClose.TextColor3 = Theme.subtext
+        BanClose.Text = "×"
+        BanClose.ZIndex = 163
+        BanClose.Parent = BanPopup
+        round(BanClose, 8)
+        stroke(BanClose, Theme.stroke, 1, 0.1)
+
+        BanClose.MouseButton1Click:Connect(function()
+            BanDim:Destroy()
+        end)
+
+        -- Header section
+        local BanTitle = Instance.new("TextLabel")
+        BanTitle.Size = UDim2.new(1, -50, 0, 24)
+        BanTitle.Position = UDim2.new(0, 20, 0, 16)
+        BanTitle.BackgroundTransparency = 1
+        BanTitle.Font = Enum.Font.GothamBold
+        BanTitle.TextSize = 17
+        BanTitle.TextColor3 = Theme.text
+        BanTitle.TextXAlignment = Enum.TextXAlignment.Left
+        BanTitle.Text = "Ban Player"
+        BanTitle.ZIndex = 162
+        BanTitle.Parent = BanPopup
+
+        local banTargetName = Instance.new("TextLabel")
+        banTargetName.Size = UDim2.new(1, -50, 0, 16)
+        banTargetName.Position = UDim2.new(0, 20, 0, 42)
+        banTargetName.BackgroundTransparency = 1
+        banTargetName.Font = Enum.Font.Gotham
+        banTargetName.TextSize = 12
+        banTargetName.TextColor3 = Theme.subtext
+        banTargetName.TextXAlignment = Enum.TextXAlignment.Left
+        banTargetName.Text = player.DisplayName .. "  •  @" .. player.Name
+        banTargetName.ZIndex = 162
+        banTargetName.Parent = BanPopup
+
+        -- Divider
+        local Divider1 = Instance.new("Frame")
+        Divider1.Size = UDim2.new(1, -40, 0, 1)
+        Divider1.Position = UDim2.new(0, 20, 0, 68)
+        Divider1.BackgroundColor3 = Theme.stroke
+        Divider1.BorderSizePixel = 0
+        Divider1.ZIndex = 162
+        Divider1.Parent = BanPopup
+
+        -- Presets label
+        local PresetsLabel = Instance.new("TextLabel")
+        PresetsLabel.Size = UDim2.new(1, -40, 0, 16)
+        PresetsLabel.Position = UDim2.new(0, 20, 0, 78)
+        PresetsLabel.BackgroundTransparency = 1
+        PresetsLabel.Font = Enum.Font.GothamBold
+        PresetsLabel.TextSize = 10
+        PresetsLabel.TextColor3 = Theme.subtext
+        PresetsLabel.TextXAlignment = Enum.TextXAlignment.Left
+        PresetsLabel.Text = "PRESET DURATIONS"
+        PresetsLabel.ZIndex = 162
+        PresetsLabel.Parent = BanPopup
+
+        local banY = 100
+        local function makeBanButton(text, durationKey, isPermanent)
+            local BB = Instance.new("TextButton")
+            BB.Size = UDim2.new(1, -40, 0, 34)
+            BB.Position = UDim2.new(0, 20, 0, banY)
+            BB.BackgroundColor3 = isPermanent and Theme.danger or Theme.card
+            BB.BackgroundTransparency = isPermanent and 0.7 or 0
+            BB.BorderSizePixel = 0
+            BB.Font = Enum.Font.GothamBold
+            BB.TextSize = 12
+            BB.TextColor3 = isPermanent and Color3.fromRGB(255, 200, 200) or Theme.text
+            BB.TextXAlignment = Enum.TextXAlignment.Left
+            BB.Text = "   " .. text
+            BB.ZIndex = 162
+            BB.Parent = BanPopup
+            round(BB, 8)
+            stroke(BB, isPermanent and Theme.danger or Theme.stroke, 1, 0.1)
+            banY = banY + 38
+
+            BB.MouseEnter:Connect(function()
+                tween(BB, {BackgroundTransparency = isPermanent and 0.4 or 0.3}, 0.2, Enum.EasingStyle.Sine)
+            end)
+            BB.MouseLeave:Connect(function()
+                tween(BB, {BackgroundTransparency = isPermanent and 0.7 or 0}, 0.25, Enum.EasingStyle.Sine)
+            end)
+            BB.MouseButton1Click:Connect(function()
+                adminBan(player, durationKey)
+                if durationKey == "perm" then
+                    showNotification("Permanently banned " .. player.Name, 3)
+                else
+                    showNotification("Banned " .. player.Name .. " (" .. text .. ")", 3)
+                end
+                BanDim:Destroy()
+                Dim:Destroy()
+            end)
+        end
+
+        makeBanButton("Permanent", "perm", true)
+        makeBanButton("1 Hour", "1h")
+        makeBanButton("1 Day", "1d")
+        makeBanButton("1 Week", "1w")
+        makeBanButton("1 Month", "1m")
+
+        -- Custom section label
+        local CustomLabel = Instance.new("TextLabel")
+        CustomLabel.Size = UDim2.new(1, -40, 0, 16)
+        CustomLabel.Position = UDim2.new(0, 20, 0, banY + 4)
+        CustomLabel.BackgroundTransparency = 1
+        CustomLabel.Font = Enum.Font.GothamBold
+        CustomLabel.TextSize = 10
+        CustomLabel.TextColor3 = Theme.subtext
+        CustomLabel.TextXAlignment = Enum.TextXAlignment.Left
+        CustomLabel.Text = "CUSTOM DURATION"
+        CustomLabel.ZIndex = 162
+        CustomLabel.Parent = BanPopup
+        banY = banY + 24
+
+        -- Input row: [number] [unit] [ban btn]
+        local customInput = Instance.new("TextBox")
+        customInput.Size = UDim2.new(0, 70, 0, 30)
+        customInput.Position = UDim2.new(0, 20, 0, banY)
+        customInput.BackgroundColor3 = Theme.card
+        customInput.BorderSizePixel = 0
+        customInput.Font = Enum.Font.GothamBold
+        customInput.TextSize = 13
+        customInput.TextColor3 = Theme.text
+        customInput.PlaceholderText = "30"
+        customInput.PlaceholderColor3 = Theme.subtext
+        customInput.Text = ""
+        customInput.ClearTextOnFocus = false
+        customInput.ZIndex = 162
+        customInput.Parent = BanPopup
+        round(customInput, 7)
+        stroke(customInput, Theme.stroke, 1, 0.1)
+
+        local unitBtn = Instance.new("TextButton")
+        unitBtn.Size = UDim2.new(0, 90, 0, 30)
+        unitBtn.Position = UDim2.new(0, 96, 0, banY)
+        unitBtn.BackgroundColor3 = Theme.card
+        unitBtn.BorderSizePixel = 0
+        unitBtn.Font = Enum.Font.GothamBold
+        unitBtn.TextSize = 11
+        unitBtn.TextColor3 = Theme.text
+        unitBtn.Text = "Minutes"
+        unitBtn.ZIndex = 162
+        unitBtn.Parent = BanPopup
+        round(unitBtn, 7)
+        stroke(unitBtn, Theme.stroke, 1, 0.1)
+
+        local units = { "Seconds", "Minutes", "Hours", "Days", "Weeks" }
+        local unitMultipliers = { Seconds = 1, Minutes = 60, Hours = 3600, Days = 86400, Weeks = 604800 }
+        local currentUnitIdx = 2
+        unitBtn.MouseButton1Click:Connect(function()
+            currentUnitIdx = currentUnitIdx + 1
+            if currentUnitIdx > #units then currentUnitIdx = 1 end
+            unitBtn.Text = units[currentUnitIdx]
+        end)
+
+        local applyBtn = Instance.new("TextButton")
+        applyBtn.Size = UDim2.new(0, 60, 0, 30)
+        applyBtn.Position = UDim2.new(0, 192, 0, banY)
+        applyBtn.BackgroundColor3 = Theme.danger
+        applyBtn.BackgroundTransparency = 0.4
+        applyBtn.BorderSizePixel = 0
+        applyBtn.Font = Enum.Font.GothamBold
+        applyBtn.TextSize = 11
+        applyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        applyBtn.Text = "Apply"
+        applyBtn.ZIndex = 162
+        applyBtn.Parent = BanPopup
+        round(applyBtn, 7)
+        stroke(applyBtn, Theme.danger, 1, 0.2)
+
+        applyBtn.MouseButton1Click:Connect(function()
+            local rawText = customInput.Text:gsub("[^0-9]", "")
+            local num = tonumber(rawText)
+            if not num or num <= 0 then
+                showNotification("Enter a valid number", 2)
+                return
+            end
+            local unitName = units[currentUnitIdx]
+            local seconds = num * unitMultipliers[unitName]
+            adminAddBan(player, seconds)
+            showNotification("Banned " .. player.Name .. " for " .. num .. " " .. unitName, 3)
+            BanDim:Destroy()
+            Dim:Destroy()
+        end)
+
+        banY = banY + 42
+
+        -- Cancel button at bottom
+        local CancelBtn = Instance.new("TextButton")
+        CancelBtn.Size = UDim2.new(1, -40, 0, 34)
+        CancelBtn.Position = UDim2.new(0, 20, 1, -44)
+        CancelBtn.BackgroundColor3 = Theme.card
+        CancelBtn.BorderSizePixel = 0
+        CancelBtn.Font = Enum.Font.GothamBold
+        CancelBtn.TextSize = 12
+        CancelBtn.TextColor3 = Theme.subtext
+        CancelBtn.Text = "Cancel"
+        CancelBtn.ZIndex = 162
+        CancelBtn.Parent = BanPopup
+        round(CancelBtn, 9)
+        stroke(CancelBtn, Theme.stroke, 1, 0.1)
+
+        CancelBtn.MouseButton1Click:Connect(function()
+            BanDim:Destroy()
+        end)
+
+        BanDim.MouseButton1Click:Connect(function()
+            BanDim:Destroy()
+        end)
+    end)
+
+    -- Freeze/Unfreeze toggle
+    if frozenPlayers[player.UserId] then
+        makeActionButton("Unfreeze", Color3.fromRGB(100, 180, 255), "❄", function()
+            adminUnfreeze(player)
+            showNotification("Unfroze " .. player.Name, 2)
+            -- Close and reopen popup to refresh button state
+            Dim:Destroy()
+            task.delay(0.15, function()
+                showActionPopup(player)
+            end)
+        end)
+    else
+        makeActionButton("Freeze", Color3.fromRGB(100, 180, 255), "❄", function()
+            adminFreeze(player)
+            showNotification("Froze " .. player.Name, 2)
+            -- Close and reopen popup to refresh button state
+            Dim:Destroy()
+            task.delay(0.15, function()
+                showActionPopup(player)
+            end)
+        end)
+    end
+
+    makeActionButton("Kill", Theme.danger, "☠", function()
+        adminKill(player)
+        showNotification("Killed " .. player.Name, 2)
+    end)
+
+    -- Close button
+    local CloseAction = Instance.new("TextButton")
+    CloseAction.Size = UDim2.new(0, 30, 0, 30)
+    CloseAction.Position = UDim2.new(1, -38, 0, 10)
+    CloseAction.BackgroundColor3 = Theme.card
+    CloseAction.BorderSizePixel = 0
+    CloseAction.Font = Enum.Font.GothamBold
+    CloseAction.TextSize = 16
+    CloseAction.TextColor3 = Theme.subtext
+    CloseAction.Text = "×"
+    CloseAction.ZIndex = 153
+    CloseAction.Parent = Popup
+    round(CloseAction, 8)
+    stroke(CloseAction, Theme.stroke, 1, 0.1)
+
+    CloseAction.MouseButton1Click:Connect(function()
+        Dim:Destroy()
+    end)
+
+    Dim.MouseButton1Click:Connect(function()
+        Dim:Destroy()
+    end)
+end
+
+-- ═══ ADMIN PAGE ═══════════════════════════════════════════
+local function createAdminPage()
+    local Page = Instance.new("CanvasGroup")
+    Page.Size = UDim2.new(1, 0, 1, 0)
+    Page.BackgroundTransparency = 1
+    Page.GroupTransparency = 0
+    Page.Visible = false
+    Page.ZIndex = 5
+    Page.Parent = Content
+
+    -- ─── Category tabs (Players / Banland) ───────────────
+    local currentCategory = "Players"
+    local CategoryContainer = Instance.new("Frame")
+    CategoryContainer.Size = UDim2.new(1, -4, 0, 36)
+    CategoryContainer.BackgroundTransparency = 1
+    CategoryContainer.ZIndex = 7
+    CategoryContainer.Parent = Page
+
+    local catLayout = Instance.new("UIListLayout")
+    catLayout.FillDirection = Enum.FillDirection.Horizontal
+    catLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    catLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    catLayout.Padding = UDim.new(0, 4)
+    catLayout.Parent = CategoryContainer
+
+    local function makeCatButton(name, isActive)
+        local Btn = Instance.new("TextButton")
+        Btn.Size = UDim2.new(0, 140, 0, 32)
+        Btn.BackgroundColor3 = isActive and Theme.accent or Theme.card
+        Btn.BackgroundTransparency = isActive and 0.4 or 0.7
+        Btn.BorderSizePixel = 0
+        Btn.Font = Enum.Font.GothamBold
+        Btn.TextSize = 11
+        Btn.TextColor3 = isActive and Color3.fromRGB(255, 255, 255) or Theme.subtext
+        Btn.Text = name
+        Btn.ZIndex = 8
+        Btn.Parent = CategoryContainer
+        round(Btn, 8)
+        stroke(Btn, isActive and Theme.accent or Theme.stroke, 1, 0.1)
+        return Btn
+    end
+
+    local PlayersTab = makeCatButton("Players", true)
+    local BanlandTab = makeCatButton("Banland", false)
+
+    -- Search bar
+    local SearchBar = Instance.new("TextBox")
+    SearchBar.Size = UDim2.new(1, -4, 0, 32)
+    SearchBar.Position = UDim2.new(0, 0, 0, 40)
+    SearchBar.BackgroundColor3 = Theme.card
+    SearchBar.BorderSizePixel = 0
+    SearchBar.Font = Enum.Font.GothamMedium
+    SearchBar.TextSize = 12
+    SearchBar.TextColor3 = Theme.text
+    SearchBar.PlaceholderText = "Search..."
+    SearchBar.PlaceholderColor3 = Theme.subtext
+    SearchBar.Text = ""
+    SearchBar.ZIndex = 7
+    SearchBar.Parent = Page
+    round(SearchBar, 8)
+    stroke(SearchBar, Theme.stroke, 1, 0.15)
+
+    local searchPad = Instance.new("UIPadding")
+    searchPad.PaddingLeft = UDim.new(0, 12)
+    searchPad.Parent = SearchBar
+
+    -- Scroll list
+    local Scroll = Instance.new("ScrollingFrame")
+    Scroll.Size = UDim2.new(1, 0, 1, -80)
+    Scroll.Position = UDim2.new(0, 0, 0, 78)
+    Scroll.BackgroundTransparency = 1
+    Scroll.BorderSizePixel = 0
+    Scroll.ScrollBarThickness = 3
+    Scroll.ScrollBarImageColor3 = Theme.accent
+    Scroll.ScrollBarImageTransparency = 0.5
+    Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    Scroll.ZIndex = 6
+    Scroll.Parent = Page
+
+    local Layout = Instance.new("UIListLayout")
+    Layout.FillDirection = Enum.FillDirection.Vertical
+    Layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    Layout.SortOrder = Enum.SortOrder.LayoutOrder
+    Layout.Padding = UDim.new(0, 4)
+    Layout.Parent = Scroll
+
+    local CountLabel = Instance.new("TextLabel")
+    CountLabel.Size = UDim2.new(1, 0, 0, 18)
+    CountLabel.BackgroundTransparency = 1
+    CountLabel.Font = Enum.Font.Gotham
+    CountLabel.TextSize = 10
+    CountLabel.TextColor3 = Theme.subtext
+    CountLabel.Text = ""
+    CountLabel.LayoutOrder = 999
+    CountLabel.ZIndex = 7
+    CountLabel.Parent = Scroll
+
+    local playerCards = {}
+
+    local function clearCards()
+        for _, card in ipairs(playerCards) do
+            if card and card.Parent then card:Destroy() end
+        end
+        playerCards = {}
+    end
+
+    -- Build a player card (for Players tab)
+    local function buildPlayerCard(player, order)
+        local Card = Instance.new("TextButton")
+        Card.Size = UDim2.new(1, -4, 0, 52)
+        Card.BackgroundColor3 = Theme.card
+        Card.BorderSizePixel = 0
+        Card.Text = ""
+        Card.LayoutOrder = order
+        Card.ZIndex = 7
+        Card.Parent = Scroll
+        round(Card, 10)
+        stroke(Card, Theme.stroke, 1, 0.15)
+
+        local Icon = Instance.new("ImageLabel")
+        Icon.Size = UDim2.new(0, 36, 0, 36)
+        Icon.Position = UDim2.new(0, 8, 0.5, -18)
+        Icon.BackgroundColor3 = Theme.bgLight
+        Icon.BorderSizePixel = 0
+        Icon.Image = "rbxthumb://type=AvatarHeadShot&id=" .. player.UserId .. "&w=150&h=150"
+        Icon.ZIndex = 8
+        Icon.Parent = Card
+        round(Icon, 18)
+
+        local DName = Instance.new("TextLabel")
+        DName.Size = UDim2.new(1, -160, 0, 18)
+        DName.Position = UDim2.new(0, 52, 0, 8)
+        DName.BackgroundTransparency = 1
+        DName.Font = Enum.Font.GothamSemibold
+        DName.TextSize = 13
+        DName.TextColor3 = Theme.text
+        DName.TextXAlignment = Enum.TextXAlignment.Left
+        DName.Text = player.DisplayName
+        DName.ZIndex = 8
+        DName.Parent = Card
+
+        local UName = Instance.new("TextLabel")
+        UName.Size = UDim2.new(1, -160, 0, 14)
+        UName.Position = UDim2.new(0, 52, 0, 27)
+        UName.BackgroundTransparency = 1
+        UName.Font = Enum.Font.Gotham
+        UName.TextSize = 11
+        UName.TextColor3 = Theme.subtext
+        UName.TextXAlignment = Enum.TextXAlignment.Left
+        UName.Text = "@" .. player.Name
+        UName.ZIndex = 8
+        UName.Parent = Card
+
+        -- Status badges (colored dots, no text)
+        local badgeX = -100
+        if isScriptUser(player) then
+            local Badge = Instance.new("Frame")
+            Badge.Size = UDim2.new(0, 10, 0, 10)
+            Badge.Position = UDim2.new(1, badgeX, 0.5, -5)
+            Badge.BackgroundColor3 = Theme.accent
+            Badge.BorderSizePixel = 0
+            Badge.ZIndex = 9
+            Badge.Parent = Card
+            round(Badge, 5)
+            badgeX = badgeX - 14
+        end
+        if checkIsAdmin(player) then
+            local Badge = Instance.new("Frame")
+            Badge.Size = UDim2.new(0, 10, 0, 10)
+            Badge.Position = UDim2.new(1, badgeX, 0.5, -5)
+            Badge.BackgroundColor3 = Theme.accentLight
+            Badge.BorderSizePixel = 0
+            Badge.ZIndex = 9
+            Badge.Parent = Card
+            round(Badge, 5)
+            badgeX = badgeX - 14
+        end
+        if isPlayerBanned(player) then
+            local Badge = Instance.new("Frame")
+            Badge.Size = UDim2.new(0, 10, 0, 10)
+            Badge.Position = UDim2.new(1, badgeX, 0.5, -5)
+            Badge.BackgroundColor3 = Theme.danger
+            Badge.BorderSizePixel = 0
+            Badge.ZIndex = 9
+            Badge.Parent = Card
+            round(Badge, 5)
+            badgeX = badgeX - 14
+        end
+        if frozenPlayers[player.UserId] then
+            local Badge = Instance.new("Frame")
+            Badge.Size = UDim2.new(0, 10, 0, 10)
+            Badge.Position = UDim2.new(1, badgeX, 0.5, -5)
+            Badge.BackgroundColor3 = Color3.fromRGB(100, 180, 255)
+            Badge.BorderSizePixel = 0
+            Badge.ZIndex = 9
+            Badge.Parent = Card
+            round(Badge, 5)
+        end
+
+        local ActionsBtn = Instance.new("TextLabel")
+        ActionsBtn.Size = UDim2.new(0, 70, 0, 28)
+        ActionsBtn.Position = UDim2.new(1, -80, 0.5, -14)
+        ActionsBtn.BackgroundColor3 = Theme.accent
+        ActionsBtn.BackgroundTransparency = 0.4
+        ActionsBtn.BorderSizePixel = 0
+        ActionsBtn.Font = Enum.Font.GothamBold
+        ActionsBtn.TextSize = 10
+        ActionsBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        ActionsBtn.Text = "Actions"
+        ActionsBtn.ZIndex = 8
+        ActionsBtn.Parent = Card
+        round(ActionsBtn, 7)
+
+        Card.MouseEnter:Connect(function()
+            tween(Card, {BackgroundColor3 = Theme.cardHover}, 0.2, Enum.EasingStyle.Sine)
+            tween(ActionsBtn, {BackgroundTransparency = 0.15}, 0.2, Enum.EasingStyle.Sine)
+        end)
+        Card.MouseLeave:Connect(function()
+            tween(Card, {BackgroundColor3 = Theme.card}, 0.25, Enum.EasingStyle.Sine)
+            tween(ActionsBtn, {BackgroundTransparency = 0.4}, 0.25, Enum.EasingStyle.Sine)
+        end)
+
+        Card.MouseButton1Click:Connect(function()
+            showActionPopup(player)
+        end)
+
+        return Card
+    end
+
+    -- Build a banned player card (for Banland tab)
+    local function buildBannedCard(userIdStr, banData, order)
+        local Card = Instance.new("Frame")
+        Card.Size = UDim2.new(1, -4, 0, 52)
+        Card.BackgroundColor3 = Theme.card
+        Card.BorderSizePixel = 0
+        Card.LayoutOrder = order
+        Card.ZIndex = 7
+        Card.Parent = Scroll
+        round(Card, 10)
+        stroke(Card, Theme.danger, 1, 0.2)
+
+        local Icon = Instance.new("ImageLabel")
+        Icon.Size = UDim2.new(0, 36, 0, 36)
+        Icon.Position = UDim2.new(0, 8, 0.5, -18)
+        Icon.BackgroundColor3 = Theme.bgLight
+        Icon.BorderSizePixel = 0
+        local userIdNum = tonumber(userIdStr)
+        if userIdNum then
+            Icon.Image = "rbxthumb://type=AvatarHeadShot&id=" .. userIdNum .. "&w=150&h=150"
+        end
+        Icon.ZIndex = 8
+        Icon.Parent = Card
+        round(Icon, 18)
+
+        local DName = Instance.new("TextLabel")
+        DName.Size = UDim2.new(1, -160, 0, 18)
+        DName.Position = UDim2.new(0, 52, 0, 6)
+        DName.BackgroundTransparency = 1
+        DName.Font = Enum.Font.GothamSemibold
+        DName.TextSize = 13
+        DName.TextColor3 = Theme.text
+        DName.TextXAlignment = Enum.TextXAlignment.Left
+        DName.Text = banData.displayName or banData.name or "Unknown"
+        DName.ZIndex = 8
+        DName.Parent = Card
+
+        local BanInfo = Instance.new("TextLabel")
+        BanInfo.Size = UDim2.new(1, -160, 0, 28)
+        BanInfo.Position = UDim2.new(0, 52, 0, 22)
+        BanInfo.BackgroundTransparency = 1
+        BanInfo.Font = Enum.Font.Gotham
+        BanInfo.TextSize = 10
+        BanInfo.TextColor3 = Theme.subtext
+        BanInfo.TextXAlignment = Enum.TextXAlignment.Left
+        BanInfo.TextYAlignment = Enum.TextYAlignment.Top
+        BanInfo.TextWrapped = true
+        if banData.expires == nil then
+            BanInfo.Text = "@" .. (banData.name or "?") .. "  •  Permanent"
+        else
+            local remaining = banData.expires - os.time()
+            if remaining <= 0 then
+                BanInfo.Text = "@" .. (banData.name or "?") .. "  •  Expired"
+            else
+                local days = math.floor(remaining / 86400)
+                local hours = math.floor((remaining % 86400) / 3600)
+                local mins = math.floor((remaining % 3600) / 60)
+                if days > 0 then
+                    BanInfo.Text = "@" .. (banData.name or "?") .. "  •  " .. days .. "d " .. hours .. "h remaining"
+                elseif hours > 0 then
+                    BanInfo.Text = "@" .. (banData.name or "?") .. "  •  " .. hours .. "h " .. mins .. "m remaining"
+                else
+                    BanInfo.Text = "@" .. (banData.name or "?") .. "  •  " .. mins .. "m remaining"
+                end
+            end
+        end
+        BanInfo.ZIndex = 8
+        BanInfo.Parent = Card
+
+        local UnbanBtn = Instance.new("TextButton")
+        UnbanBtn.Size = UDim2.new(0, 70, 0, 28)
+        UnbanBtn.Position = UDim2.new(1, -80, 0.5, -14)
+        UnbanBtn.BackgroundColor3 = Theme.success
+        UnbanBtn.BackgroundTransparency = 0.4
+        UnbanBtn.BorderSizePixel = 0
+        UnbanBtn.Font = Enum.Font.GothamBold
+        UnbanBtn.TextSize = 10
+        UnbanBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        UnbanBtn.Text = "Unban"
+        UnbanBtn.ZIndex = 8
+        UnbanBtn.Parent = Card
+        round(UnbanBtn, 7)
+
+        UnbanBtn.MouseEnter:Connect(function()
+            tween(UnbanBtn, {BackgroundTransparency = 0.15}, 0.2, Enum.EasingStyle.Sine)
+        end)
+        UnbanBtn.MouseLeave:Connect(function()
+            tween(UnbanBtn, {BackgroundTransparency = 0.4}, 0.25, Enum.EasingStyle.Sine)
+        end)
+        UnbanBtn.MouseButton1Click:Connect(function()
+            local success = adminRemoveBan(userIdStr)
+            if success then
+                showNotification("Unbanned " .. (banData.name or userIdStr), 2)
+            else
+                showNotification("Failed to unban — check connection", 2)
+            end
+            rebuildList()
+        end)
+
+        return Card
+    end
+
+    local isRebuilding = false
+    function rebuildList()
+        -- Debounce — prevent concurrent rebuilds
+        if isRebuilding then return end
+        isRebuilding = true
+
+        clearCards()
+        local searchTerm = SearchBar.Text:lower():gsub("%s+", "")
+        local order = 1
+        local count = 0
+
+        if currentCategory == "Players" then
+            -- Fetch fresh online users from backend
+            local freshData = fetchBackend()
+            local freshOnline = {}
+            if freshData then
+                if freshData.online then freshOnline = freshData.online end
+                if freshData.bans then backendCache.bans = freshData.bans end
+                onlineUsers = freshOnline
+            end
+            -- Show script users who are in this server, excluding admins and self
+            for _, player in ipairs(Players:GetPlayers()) do
+                -- Skip self
+                if player.UserId ~= LocalPlayer.UserId then
+                    -- Skip admins
+                    if not checkIsAdmin(player) then
+                        -- Check if this player is registered as online in the backend
+                        local entry = freshOnline[tostring(player.UserId)]
+                        local isOnline = entry and (os.time() - entry.lastSeen) < 15
+                        if isOnline then
+                            local matchSearch = true
+                            if searchTerm ~= "" then
+                                local fullName = (player.Name .. player.DisplayName):lower():gsub("%s+", "")
+                                if not fullName:find(searchTerm, 1, true) then
+                                    matchSearch = false
+                                end
+                            end
+
+                            if matchSearch then
+                                local card = buildPlayerCard(player, order)
+                                table.insert(playerCards, card)
+                                order = order + 1
+                                count = count + 1
+                            end
+                        end
+                    end
+                end
+            end
+            CountLabel.Text = count .. " script users online"
+        else
+            -- Banland — refresh from backend first
+            local freshData = fetchBackend()
+            if freshData then backendCache = freshData end
+            for userIdStr, banData in pairs(backendCache.bans) do
+                local matchSearch = true
+                if searchTerm ~= "" then
+                    local banName = ((banData.name or "") .. (banData.displayName or "")):lower():gsub("%s+", "")
+                    if not banName:find(searchTerm, 1, true) then
+                        matchSearch = false
+                    end
+                end
+
+                if matchSearch then
+                    local card = buildBannedCard(userIdStr, banData, order)
+                    table.insert(playerCards, card)
+                    order = order + 1
+                    count = count + 1
+                end
+            end
+            CountLabel.Text = count .. " banned users"
+        end
+
+        isRebuilding = false
+    end
+
+    -- Category tab switching
+    PlayersTab.MouseButton1Click:Connect(function()
+        currentCategory = "Players"
+        PlayersTab.BackgroundColor3 = Theme.accent
+        PlayersTab.BackgroundTransparency = 0.4
+        PlayersTab.TextColor3 = Color3.fromRGB(255, 255, 255)
+        BanlandTab.BackgroundColor3 = Theme.card
+        BanlandTab.BackgroundTransparency = 0.7
+        BanlandTab.TextColor3 = Theme.subtext
+        SearchBar.PlaceholderText = "Search players..."
+        rebuildList()
+    end)
+
+    BanlandTab.MouseButton1Click:Connect(function()
+        currentCategory = "Banland"
+        BanlandTab.BackgroundColor3 = Theme.accent
+        BanlandTab.BackgroundTransparency = 0.4
+        BanlandTab.TextColor3 = Color3.fromRGB(255, 255, 255)
+        PlayersTab.BackgroundColor3 = Theme.card
+        PlayersTab.BackgroundTransparency = 0.7
+        PlayersTab.TextColor3 = Theme.subtext
+        SearchBar.PlaceholderText = "Search banned users..."
+        rebuildList()
+    end)
+
+    -- Search bar updates
+    SearchBar:GetPropertyChangedSignal("Text"):Connect(function()
+        rebuildList()
+    end)
+
+    -- Auto-update when players join/leave
+    Players.PlayerAdded:Connect(function()
+        task.wait(0.5)
+        rebuildList()
+    end)
+    Players.PlayerRemoving:Connect(function()
+        task.wait(0.1)
+        rebuildList()
+    end)
+
+    -- Auto-refresh every 3 seconds when the page is visible (for Banland updates)
+    task.spawn(function()
+        while true do
+            task.wait(3)
+            if Page.Visible then
+                rebuildList()
+            end
+        end
+    end)
+
+    -- Initial build
+    rebuildList()
+
+    return Page
+end
+
+-- ─── Build all pages ─────────────────────────────────────
+TabPages[1] = createMovesPage()
+TabPages[2] = createUltsPage()
+TabPages[3] = createCreditsPage()
+TabPages[4] = createSettingsPage()
+if isAdmin then
+    TabPages[5] = createAdminPage()
+end
+
+-- ─── Wire sidebar buttons ────────────────────────────────
+for i, name in ipairs(TAB_NAMES) do
+    local btn = makeSideButton(name, i)
+    btn.MouseButton1Click:Connect(function() switchTab(i) end)
+    btn.MouseEnter:Connect(function()
+        if activeTab ~= i then
+            tween(btn, {BackgroundTransparency = 0.7, TextColor3 = Color3.fromRGB(200, 205, 230)}, 0.2, Enum.EasingStyle.Sine)
+        end
+    end)
+    btn.MouseLeave:Connect(function()
+        if activeTab ~= i then
+            tween(btn, {BackgroundTransparency = 1, TextColor3 = Theme.subtext}, 0.25, Enum.EasingStyle.Sine)
+        end
+    end)
+end
+
+-- ─── Minimize / Close ────────────────────────────────────
+local minimized = false
+MinBtn.MouseEnter:Connect(function()
+    tween(MinBtn, {BackgroundColor3 = Theme.cardHover}, 0.2, Enum.EasingStyle.Sine)
+end)
+MinBtn.MouseLeave:Connect(function()
+    tween(MinBtn, {BackgroundColor3 = Theme.card}, 0.25, Enum.EasingStyle.Sine)
+end)
+MinBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    if minimized then
+        tween(Main, {Size = UDim2.new(0, WINDOW_W, 0, 50)}, 0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+        Content.Visible = false
+        Sidebar.Visible = false
+    else
+        Content.Visible = true
+        Sidebar.Visible = true
+        tween(Main, {Size = UDim2.new(0, WINDOW_W, 0, WINDOW_H)}, 0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+    end
+end)
+
+CloseBtn.MouseEnter:Connect(function()
+    tween(CloseBtn, {BackgroundColor3 = Color3.fromRGB(80, 30, 40), TextColor3 = Color3.fromRGB(255, 120, 130)}, 0.2, Enum.EasingStyle.Sine)
+end)
+CloseBtn.MouseLeave:Connect(function()
+    tween(CloseBtn, {BackgroundColor3 = Theme.card, TextColor3 = Theme.subtext}, 0.25, Enum.EasingStyle.Sine)
+end)
+CloseBtn.MouseButton1Click:Connect(function()
+    tween(Main, {Size = UDim2.new(0, WINDOW_W - 40, 0, WINDOW_H - 20), GroupTransparency = 0.5}, 0.15, Enum.EasingStyle.Sine)
+    task.wait(0.15)
+    tween(Main, {Size = UDim2.new(0, 0, 0, 0), Position = UDim2.new(0.5, 0, 0.5, 0), GroupTransparency = 1}, 0.35, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+    task.wait(0.4)
+    if ScreenGui then ScreenGui:Destroy() end
+end)
+
+-- ─── Draggable (top bar AND sidebar) ─────────────────────
+local dragging = false
+local dragInput, dragStart, startPos
+
+-- Helper to attach drag to any frame
+local function attachDrag(frame)
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = Main.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    frame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+end
+
+-- Make both the top bar and sidebar draggable
+attachDrag(TopBar)
+attachDrag(Sidebar)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+-- ─── Toggle with configurable keybind ────────────────────
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == hideKeybind then
+        guiVisible = not guiVisible
+        if guiVisible then
+            Main.Visible = true
+            tween(Main, {GroupTransparency = 0}, 0.3, Enum.EasingStyle.Sine)
+        else
+            local t = tween(Main, {GroupTransparency = 1}, 0.25, Enum.EasingStyle.Sine)
+            if t then
+                t.Completed:Connect(function()
+                    if not guiVisible then Main.Visible = false end
+                end)
+            end
+        end
+    end
+end)
+
+-- ─── Spinning diamond + orbiting dots ────────────────────
+task.spawn(function()
+    local rot = 0
+    local angle = 0
+    while ScreenGui and ScreenGui.Parent do
+        rot = (rot + 1.5) % 360
+        angle = (angle + 0.6) % 360
+        if Diamond and Diamond.Parent then
+            Diamond.Rotation = 45 + rot
+        end
+        for i, d in ipairs(orbitDots) do
+            if d and d.Parent then
+                local a = math.rad(angle + (i - 1) * 90)
+                local r = 15
+                d.Position = UDim2.new(0.5, math.cos(a) * r - 1.5, 0.5, math.sin(a) * r - 1.5)
+            end
+        end
+        task.wait(0.016)
+    end
+end)
+
+-- ─── Update Log Popup ────────────────────────────────────
+UpdateLogPopup = Instance.new("CanvasGroup")
+UpdateLogPopup.Size = UDim2.new(0, 460, 0, 440)
+UpdateLogPopup.Position = UDim2.new(0.5, -230, 0.5, -220)
+UpdateLogPopup.BackgroundColor3 = Theme.bg
+UpdateLogPopup.BorderSizePixel = 0
+UpdateLogPopup.GroupTransparency = 0
+UpdateLogPopup.ZIndex = 50
+UpdateLogPopup.Visible = false
+UpdateLogPopup.Parent = ScreenGui
+round(UpdateLogPopup, 18)
+stroke(UpdateLogPopup, Theme.accent, 2, 0)
+
+local LogGlowBar = Instance.new("Frame")
+LogGlowBar.Size = UDim2.new(1, 0, 0, 2)
+LogGlowBar.BackgroundColor3 = Theme.accent
+LogGlowBar.BorderSizePixel = 0
+LogGlowBar.ZIndex = 51
+LogGlowBar.Parent = UpdateLogPopup
+gradient(LogGlowBar, Theme.accent, Theme.accent2, 0)
+round(LogGlowBar, 2)
+
+local LogTitle = Instance.new("TextLabel")
+LogTitle.Size = UDim2.new(1, -40, 0, 40)
+LogTitle.Position = UDim2.new(0, 22, 0, 16)
+LogTitle.BackgroundTransparency = 1
+LogTitle.Font = Enum.Font.GothamBold
+LogTitle.TextSize = 18
+LogTitle.TextColor3 = Theme.text
+LogTitle.TextXAlignment = Enum.TextXAlignment.Left
+LogTitle.Text = "Update Log — v1.2"
+LogTitle.ZIndex = 51
+LogTitle.Parent = UpdateLogPopup
+
+local LogScroll = Instance.new("ScrollingFrame")
+LogScroll.Size = UDim2.new(1, -44, 1, -110)
+LogScroll.Position = UDim2.new(0, 22, 0, 62)
+LogScroll.BackgroundTransparency = 1
+LogScroll.BorderSizePixel = 0
+LogScroll.ScrollBarThickness = 3
+LogScroll.ScrollBarImageColor3 = Theme.accent
+LogScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+LogScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+LogScroll.ZIndex = 51
+LogScroll.Parent = UpdateLogPopup
+
+local LogContent = Instance.new("TextLabel")
+LogContent.Size = UDim2.new(1, 0, 0, 0)
+LogContent.BackgroundTransparency = 1
+LogContent.Font = Enum.Font.Gotham
+LogContent.TextSize = 12
+LogContent.TextColor3 = Theme.text
+LogContent.TextXAlignment = Enum.TextXAlignment.Left
+LogContent.TextYAlignment = Enum.TextYAlignment.Top
+LogContent.Text = [[═══ UPDATE v1.2 ═══
+
+WHAT'S NEW:
+
+• Moves tab redesigned — now uses collapsible
+  character categories instead of a flat list
+
+• New category: Perks
+  6 perks — Sniper Smack, Simple Punches,
+  Chain Whip, Lazer Snipe, Aura Punch,
+  Strings Attached
+
+• New Movesets:
+  - Nanami — Overtime ult + Retro Garde,
+    Record Breaker, Collapse
+  - Choso — Piercing Blood, Blood Tether,
+    Slicing Exorcism
+  - Hakari — 6 moves: Pachinko, Step It,
+    Shutter Slam, The Next Arcade, Burning
+    Fever, Lucky Flurry
+  - Helicopter Guy — Propeller Fly, Spinning
+    Cyclone, Twister, Updraft
+  - Yuta — Rika Summon, Rika Throw, Rika
+    Grab. Plays sound + shows notification
+    when clicked
+  - Charles — Disgrace, Foresight, Lame
+    Passion, Staff Whirl, CAN YOU EVEN READ!
+  - Kuroroshi — Festering, Supplement, Tarnish
+
+• Extra moves added to existing Movesets:
+  - Gojo: Lapse Pull, Reversal Red
+  - Mahito: Body Repel, Soul Multiplicity
+  - Ryu: Granite Blast, Carpet Bomb,
+    Every Last Drop
+
+• "Clear all moves in inventory" button at
+  the bottom of Movesets tab
+
+• Move card accent now matches its category
+  color, including the outline glow
+
+• Renamed "Ultimates" tab to "Movesets"
+
+• Default toggle keybind changed to
+  RightControl
+
+• Notification UI revamped with bell icon
+  and sound
+
+• Removed " Ult" suffix from all Moveset
+  names
+
+Made by Poleeater]]
+LogContent.AutomaticSize = Enum.AutomaticSize.Y
+LogContent.ZIndex = 51
+LogContent.Parent = LogScroll
+
+local GotItBtn = Instance.new("TextButton")
+GotItBtn.Size = UDim2.new(0, 120, 0, 36)
+GotItBtn.Position = UDim2.new(1, -142, 1, -48)
+GotItBtn.BackgroundColor3 = Theme.accent
+GotItBtn.BorderSizePixel = 0
+GotItBtn.Font = Enum.Font.GothamBold
+GotItBtn.TextSize = 13
+GotItBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+GotItBtn.Text = "Got it ✓"
+GotItBtn.ZIndex = 51
+GotItBtn.Parent = UpdateLogPopup
+round(GotItBtn, 10)
+
+GotItBtn.MouseEnter:Connect(function()
+    tween(GotItBtn, {BackgroundTransparency = 0.2}, 0.2, Enum.EasingStyle.Sine)
+end)
+GotItBtn.MouseLeave:Connect(function()
+    tween(GotItBtn, {BackgroundTransparency = 0}, 0.25, Enum.EasingStyle.Sine)
+end)
+GotItBtn.MouseButton1Click:Connect(function()
+    tween(UpdateLogPopup, {GroupTransparency = 1}, 0.25, Enum.EasingStyle.Sine)
+    task.delay(0.25, function()
+        UpdateLogPopup.Visible = false
+    end)
+end)
+
+-- ─── Update Log Draggable ────────────────────────────────
+local logDragging = false
+local logDragInput, logDragStart, logStartPos
+
+LogTitle.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        logDragging = true
+        logDragStart = input.Position
+        logStartPos = UpdateLogPopup.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                logDragging = false
+            end
+        end)
+    end
+end)
+
+LogTitle.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        logDragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == logDragInput and logDragging then
+        local delta = input.Position - logDragStart
+        UpdateLogPopup.Position = UDim2.new(
+            logStartPos.X.Scale, logStartPos.X.Offset + delta.X,
+            logStartPos.Y.Scale, logStartPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+-- ─── YouTube Confirmation Popup ──────────────────────────
+local YtPopup = Instance.new("CanvasGroup")
+YtPopup.Size = UDim2.new(0, 360, 0, 180)
+YtPopup.Position = UDim2.new(0.5, -180, 0.5, -90)
+YtPopup.BackgroundColor3 = Theme.bg
+YtPopup.BorderSizePixel = 0
+YtPopup.GroupTransparency = 0
+YtPopup.ZIndex = 60
+YtPopup.Visible = false
+YtPopup.Parent = ScreenGui
+round(YtPopup, 16)
+stroke(YtPopup, Color3.fromRGB(255, 50, 50), 2, 0)
+
+local YtGlow = Instance.new("Frame")
+YtGlow.Size = UDim2.new(1, 0, 0, 2)
+YtGlow.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+YtGlow.BorderSizePixel = 0
+YtGlow.ZIndex = 61
+YtGlow.Parent = YtPopup
+round(YtGlow, 2)
+
+local YtIcon = Instance.new("TextLabel")
+YtIcon.AutomaticSize = Enum.AutomaticSize.X
+YtIcon.Size = UDim2.new(0, 0, 0, 32)
+YtIcon.Position = UDim2.new(0.5, 0, 0, 20)
+YtIcon.AnchorPoint = Vector2.new(0.5, 0)
+YtIcon.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+YtIcon.BorderSizePixel = 0
+YtIcon.Font = Enum.Font.GothamBold
+YtIcon.TextSize = 14
+YtIcon.TextColor3 = Color3.fromRGB(255, 255, 255)
+YtIcon.Text = "  ▶  YouTube  "
+YtIcon.ZIndex = 61
+YtIcon.Parent = YtPopup
+round(YtIcon, 8)
+
+local YtQuestion = Instance.new("TextLabel")
+YtQuestion.Size = UDim2.new(1, -40, 0, 40)
+YtQuestion.Position = UDim2.new(0, 20, 0, 65)
+YtQuestion.BackgroundTransparency = 1
+YtQuestion.Font = Enum.Font.GothamMedium
+YtQuestion.TextSize = 13
+YtQuestion.TextColor3 = Theme.text
+YtQuestion.TextWrapped = true
+YtQuestion.Text = "Open Poleeater's YouTube channel?"
+YtQuestion.ZIndex = 61
+YtQuestion.Parent = YtPopup
+
+local YtUrl = Instance.new("TextLabel")
+YtUrl.Size = UDim2.new(1, -40, 0, 16)
+YtUrl.Position = UDim2.new(0, 20, 0, 100)
+YtUrl.BackgroundTransparency = 1
+YtUrl.Font = Enum.Font.Gotham
+YtUrl.TextSize = 10
+YtUrl.TextColor3 = Theme.subtext
+YtUrl.Text = "youtube.com/@Poledrop1"
+YtUrl.ZIndex = 61
+YtUrl.Parent = YtPopup
+
+-- Yes button
+local YtYes = Instance.new("TextButton")
+YtYes.Size = UDim2.new(0, 130, 0, 34)
+YtYes.Position = UDim2.new(0.5, -138, 1, -44)
+YtYes.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+YtYes.BorderSizePixel = 0
+YtYes.Font = Enum.Font.GothamBold
+YtYes.TextSize = 12
+YtYes.TextColor3 = Color3.fromRGB(255, 255, 255)
+YtYes.Text = "Yes, open it"
+YtYes.ZIndex = 61
+YtYes.Parent = YtPopup
+round(YtYes, 8)
+
+-- No button
+local YtNo = Instance.new("TextButton")
+YtNo.Size = UDim2.new(0, 130, 0, 34)
+YtNo.Position = UDim2.new(0.5, 8, 1, -44)
+YtNo.BackgroundColor3 = Theme.card
+YtNo.BorderSizePixel = 0
+YtNo.Font = Enum.Font.GothamBold
+YtNo.TextSize = 12
+YtNo.TextColor3 = Theme.subtext
+YtNo.Text = "No thanks"
+YtNo.ZIndex = 61
+YtNo.Parent = YtPopup
+round(YtNo, 8)
+stroke(YtNo, Theme.stroke, 1, 0.1)
+
+YtYes.MouseEnter:Connect(function()
+    tween(YtYes, {BackgroundTransparency = 0.2}, 0.2, Enum.EasingStyle.Sine)
+end)
+YtYes.MouseLeave:Connect(function()
+    tween(YtYes, {BackgroundTransparency = 0}, 0.25, Enum.EasingStyle.Sine)
+end)
+YtNo.MouseEnter:Connect(function()
+    tween(YtNo, {BackgroundColor3 = Theme.cardHover}, 0.2, Enum.EasingStyle.Sine)
+end)
+YtNo.MouseLeave:Connect(function()
+    tween(YtNo, {BackgroundColor3 = Theme.card}, 0.25, Enum.EasingStyle.Sine)
+end)
+
+-- Wire YouTube button to open popup
+YtBtn.MouseButton1Click:Connect(function()
+    YtPopup.Visible = true
+    YtPopup.GroupTransparency = 1
+    tween(YtPopup, {GroupTransparency = 0}, 0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+end)
+
+-- Yes button → open URL via setclipboard + notification
+YtYes.MouseButton1Click:Connect(function()
+    -- Roblox can't directly open external URLs from local scripts safely,
+    -- so we copy to clipboard and tell the user to paste in browser
+    if setclipboard then
+        setclipboard("https://www.youtube.com/@Poledrop1")
+    end
+    -- Close popup
+    tween(YtPopup, {GroupTransparency = 1}, 0.2, Enum.EasingStyle.Sine)
+    task.delay(0.2, function()
+        YtPopup.Visible = false
+    end)
+    -- Update question to show confirmation
+    YtQuestion.Text = "URL copied to clipboard!\nPaste it in your browser."
+    task.delay(3, function()
+        YtQuestion.Text = "Open Poleeater's YouTube channel?"
+    end)
+end)
+
+-- No button → close popup
+YtNo.MouseButton1Click:Connect(function()
+    tween(YtPopup, {GroupTransparency = 1}, 0.2, Enum.EasingStyle.Sine)
+    task.delay(0.2, function()
+        YtPopup.Visible = false
+    end)
+end)
+
+-- ─── Loading Animation Sequence (with sounds) ────────────
+task.spawn(function()
+    local function makeSound(soundId, volume)
+        local s = Instance.new("Sound")
+        s.SoundId = "rbxassetid://" .. tostring(soundId)
+        s.Volume = volume or 0.5
+        s.Parent = SoundHolder
+        return s
+    end
+
+    local swooshSound   = makeSound("138890894929151", 0.5)
+    local popSound      = makeSound("140323850218372", 0.5)
+    local explodeSound  = makeSound("130113422174820", 0.6)
+    local flashSound    = makeSound("136677503683492", 0.6)
+
+    swooshSound:Play()
+    tween(LoadCube, {
+        Size = UDim2.new(0, 80, 0, 80),
+        Position = UDim2.new(0.5, -40, 0.5, -40),
+    }, 0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+    task.spawn(function()
+        local startT = tick()
+        while tick() - startT < 0.5 do
+            local progress = (tick() - startT) / 0.5
+            LoadCube.Rotation = progress * 720
+            if CubeDiamond and CubeDiamond.Parent then
+                CubeDiamond.Rotation = 45 + progress * 720
+            end
+            task.wait()
+        end
+    end)
+
+    task.wait(0.5)
+
+    popSound:Play()
+    for i, d in ipairs(loadDots) do
+        d.Visible = true
+        tween(d, {Position = UDim2.new(0.5, -3, 0.5, -3)}, 0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+    end
+
+    task.wait(0.3)
+
+    explodeSound:Play()
+    tween(LoadCube, {
+        Size = UDim2.new(0, 400, 0, 400),
+        Position = UDim2.new(0.5, -200, 0.5, -200),
+    }, 0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+
+    for _, d in ipairs(loadDots) do
+        tween(d, {BackgroundTransparency = 1}, 0.15)
+    end
+
+    task.wait(0.2)
+
+    flashSound:Play()
+    LoadCube:Destroy()
+    for _, d in ipairs(loadDots) do
+        d:Destroy()
+    end
+    Flash.BackgroundTransparency = 0
+
+    task.wait(0.5)
+
+    tween(Flash, {BackgroundTransparency = 1}, 0.5)
+
+    task.wait(0.5)
+
+    LoadingOverlay:Destroy()
+
+    Main.Visible = true
+    tween(Main, {GroupTransparency = 0}, 0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+
+    task.wait(0.5)
+
+    switchTab(1)
+
+    -- Show update log popup (v1.2)
+    task.wait(0.3)
+    UpdateLogPopup.Visible = true
+    UpdateLogPopup.GroupTransparency = 1
+    tween(UpdateLogPopup, {GroupTransparency = 0}, 0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+
+    task.delay(5, function()
+        if SoundHolder and SoundHolder.Parent then
+            SoundHolder:Destroy()
+        end
+    end)
+end)
+
+-- ─── Console ─────────────────────────────────────────────
+print("╔══════════════════════════════════════╗")
+print("║       Sorcery Hub v1.2 Loaded        ║")
+print("║       Toggle: " .. hideKeybind.Name .. string.rep(" ", 22 - #hideKeybind.Name) .. "║")
+print("║       Credits: Poleeater             ║")
+print("╚══════════════════════════════════════╝")
